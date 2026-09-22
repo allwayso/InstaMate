@@ -97,18 +97,41 @@ export interface BoneRule {
 const ax = (axis: Axis, sign: 1 | -1 = 1): AxisSpec => ({ axis, sign });
 
 /**
- * 左右成对的骨骼组。`swapLeftRight` 打开时，成对的两侧**整条规则对调**
- * （来源键 + 轴映射 + 符号一起换），而不是只换来源键。
+ * 左右成对的骨骼组。`swapLeftRight` 打开时，成对两侧的**来源键对调**，
+ * 并且对「镜像奇性」的轴取反（见 MIRROR_ODD_AXES 的推导）。
  *
- * 为什么整条对调：Kalidokit 的 rigArm 里 `invert = side === RIGHT ? 1 : -1`
- * 已经让左右两侧的**符号约定本身就相反**，所以「换左右」天然是换整套规则。
- * 只换来源键、留着另一侧的符号，会得到一个镜像颠倒的姿态。
+ * 只换来源键、符号不动是**错的** —— 实测反馈：会得到"左右对了但上下反了"。
+ * 数值上很好验：
+ *     Kalidokit 静息  K.RightUpperArm.z = −1.25   K.LeftUpperArm.z = +1.25
+ *     我们的静息      rightUpperArm = +1.257     leftUpperArm = −1.257
+ *   不交换（z × −1）：right ← K.Right → +1.25 ✅
+ *   错误的交换（z × −1）：right ← K.Left → −1.25 ❌ 手臂被压下去
+ *   正确的交换（z × +1）：right ← K.Left → +1.25 ✅
  */
 const SIDED_PAIRS: readonly (readonly [RetargetBone, RetargetBone])[] = [
   ['rightUpperArm', 'leftUpperArm'],
   ['rightLowerArm', 'leftLowerArm'],
   ['rightHand', 'leftHand'],
 ];
+
+/**
+ * 镜像（矢状面反射）下**变号**的轴。
+ *
+ * 矢状面 = 人体左右对称那个平面，它的法线是 X（左右轴）。
+ * 反射的规律：**旋转轴落在镜面内的变号，旋转轴与法线平行的不变号**。
+ *     · Y（偏航/上下轴）落在镜面内 → 变号
+ *     · Z（侧摆/前后轴）落在镜面内 → 变号
+ *     · X（左右轴 = 镜面法线） → 不变号
+ *
+ * 所以交换左右时只取反 Y 与 Z，X 保持原样。
+ */
+export const MIRROR_ODD_AXES: readonly Axis[] = ['y', 'z'];
+
+function mirrorAxes(triple: AxisTriple): AxisTriple {
+  const flip = (s: AxisSpec): AxisSpec =>
+    MIRROR_ODD_AXES.includes(s.axis) ? { axis: s.axis, sign: (s.sign === 1 ? -1 : 1) as 1 | -1 } : s;
+  return [flip(triple[0]), flip(triple[1]), flip(triple[2])] as const;
+}
 
 /**
  * ★ 需标定的常量 ①：左右是否需要交换。
@@ -215,8 +238,10 @@ export function resolveRules(swap: boolean = swapLeftRight): Record<RetargetBone
     for (const [a, b] of SIDED_PAIRS) {
       const ra = out[a];
       const rb = out[b];
-      out[a] = rb;
-      out[b] = ra;
+      // ★ 来源键对调 **且** 镜像奇性轴取反 —— 两件事必须一起做，
+      //   只换来源键会得到「左右对了但上下反了」（实测反馈）。
+      out[a] = { ...rb, axes: mirrorAxes(rb.axes) };
+      out[b] = { ...ra, axes: mirrorAxes(ra.axes) };
     }
   }
   return out;

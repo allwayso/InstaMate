@@ -78,6 +78,34 @@
         "rightLowerArm",
         "rightUpperArm"
       ]
+    },
+    {
+      "id": "mocap-20260922-201528",
+      "name": "神秘动作",
+      "url": "/clips/mocap-20260922-201528.json",
+      "source": "mocap",
+      "note": "摄像头录制；有效帧 92.3%",
+      "fps": 30,
+      "duration": 4.133333333333334,
+      "frameCount": 125,
+      "mask": [
+        "chest",
+        "head",
+        "leftHand",
+        "leftLowerArm",
+        "leftUpperArm",
+        "neck",
+        "rightHand",
+        "rightLowerArm",
+        "rightUpperArm",
+        "spine"
+      ],
+      "createdAt": "2026-09-22T12:15:28.753Z",
+      "captureId": "mocap-20260922-201528",
+      "trackingValidRatio": 0.9230769230769231,
+      "inferenceFpsMean": 19.100793417620523,
+      "longestTrackingGapMs": 297.30000001192093,
+      "qualityWarnings": []
     }
   ]
 }

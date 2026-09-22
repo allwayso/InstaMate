@@ -140,21 +140,72 @@ test('肩骨不进入 G2 驱动范围（保持基础站姿，避免抖）', () =
 
 // ── 3. 左右交换开关 ─────────────────────────────────────────────────────
 
-test('swapLeftRight 打开时，成对骨骼整条规则对调', () => {
-  const src = {
-    RightUpperArm: { x: 0.1, y: 0.2, z: -1.0 },
-    LeftUpperArm: { x: 0.05, y: 0.3, z: 1.0 },
-    RightLowerArm: { x: 0, y: 0, z: 0.3 },
-    LeftLowerArm: { x: 0, y: 0, z: -0.3 },
-  };
+/**
+ * Kalidokit 的静息值（来自它自己的 RestingDefault，实测确认）：
+ *   RightUpperArm.z = -1.25   LeftUpperArm.z = +1.25
+ * 而我们的静息值（G1 实测）：rightUpperArm = rotQ(Z, +72°) ≈ +1.257，leftUpperArm ≈ -1.257。
+ *
+ * ★ 这是本文件最有价值的一条不变式 —— Kalidokit 的静息必须映射到我们的静息。
+ *   它同时钉住了"用哪个来源键"与"符号该怎么取"两件事，
+ *   而且**两种左右配置下都必须成立**。
+ */
+const KALIDOKIT_REST = {
+  RightUpperArm: { x: 0, y: 0, z: -1.25 },
+  LeftUpperArm: { x: 0, y: 0, z: 1.25 },
+  RightLowerArm: { x: 0, y: 0, z: 0 },
+  LeftLowerArm: { x: 0, y: 0, z: 0 },
+  RightHand: { x: 0, y: 0, z: 0 },
+  LeftHand: { x: 0, y: 0, z: 0 },
+};
+
+test('★ 静息不变式：Kalidokit 的静息值映射到我们的静息值（swap = false）', () => {
+  const out = retarget({ pose: KALIDOKIT_REST }, false);
+  const dR = angleBetween(out.pose.rightUpperArm, baseQuatOf('rightUpperArm'));
+  const dL = angleBetween(out.pose.leftUpperArm, baseQuatOf('leftUpperArm'));
+  assert.ok(dR < 1, `右臂静息偏差 ${dR.toFixed(3)}°（应当很小）`);
+  assert.ok(dL < 1, `左臂静息偏差 ${dL.toFixed(3)}°（应当很小）`);
+});
+
+test('★★ 静息不变式在 swap = true 时**同样**必须成立（这就是"上下反了"那个 bug）', () => {
+  // 曾经的做法是"只换来源键、符号不动"，于是：
+  //   right ← K.Left 且 z × −1  →  −(+1.25) = −1.25
+  // 而我们的右臂静息是 +1.257 —— 差了 2.5 弧度（约 143°），
+  // 表现就是"左右对了，但手臂被压下去 / 上下反了"。
+  const out = retarget({ pose: KALIDOKIT_REST }, true);
+  const dR = angleBetween(out.pose.rightUpperArm, baseQuatOf('rightUpperArm'));
+  const dL = angleBetween(out.pose.leftUpperArm, baseQuatOf('leftUpperArm'));
+  assert.ok(dR < 1, `交换后右臂静息偏差 ${dR.toFixed(3)}°（>1° 说明符号没跟着换）`);
+  assert.ok(dL < 1, `交换后左臂静息偏差 ${dL.toFixed(3)}°（>1° 说明符号没跟着换）`);
+});
+
+test('★ 交换确实改变了输出（不是空操作）', () => {
+  const src = { RightUpperArm: { x: 0.1, y: 0.2, z: -1.0 }, LeftUpperArm: { x: 0.05, y: 0.3, z: 1.0 } };
   const off = retarget({ pose: src }, false);
   const on = retarget({ pose: src }, true);
+  assert.ok(maxDiff(on.pose.rightUpperArm, off.pose.rightUpperArm) > 1e-3, '交换后右臂应当变了');
+  assert.ok(maxDiff(on.pose.leftUpperArm, off.pose.leftUpperArm) > 1e-3, '交换后左臂应当变了');
+});
 
-  // 开着交换时，rightUpperArm 的结果必须等于关着时 leftUpperArm 的结果
-  assert.ok(maxDiff(on.pose.rightUpperArm, off.pose.leftUpperArm) < 1e-12);
-  assert.ok(maxDiff(on.pose.leftUpperArm, off.pose.rightUpperArm) < 1e-12);
-  assert.ok(maxDiff(on.pose.rightLowerArm, off.pose.leftLowerArm) < 1e-12);
-  assert.ok(maxDiff(on.pose.leftLowerArm, off.pose.rightLowerArm) < 1e-12);
+test('交换时镜像奇性轴取反：Y 与 Z 变号、X 不变（矢状面反射的规律）', () => {
+  const off = resolveRules(false);
+  const on = resolveRules(true);
+  // 只看轴与符号，不看来源键
+  const signs = (t) => t.map((s) => `${s.axis}${s.sign > 0 ? '+' : '-'}`);
+  assert.deepEqual(signs(on.rightUpperArm.axes), signs(off.rightUpperArm.axes).map((x, i) => (i === 0 ? x : x.slice(0, 1) + (x.endsWith('+') ? '-' : '+'))));
+  // X 不变、Y/Z 变号
+  assert.equal(on.rightUpperArm.axes[0], off.rightUpperArm.axes[0], 'X 是镜面法线，不该变号');
+  assert.equal(on.rightUpperArm.axes[1].sign, -off.rightUpperArm.axes[1].sign, 'Y 应当变号');
+  assert.equal(on.rightUpperArm.axes[2].sign, -off.rightUpperArm.axes[2].sign, 'Z 应当变号');
+});
+
+test('★ 交换左右不会改变中线骨骼', () => {
+  const src = { Spine: { x: 0.1, y: 0.2, z: 0.3 } };
+  const face = { head: { x: 0.1, y: 0.2, z: 0.3 } };
+  const off = retarget({ pose: src, face }, false);
+  const on = retarget({ pose: src, face }, true);
+  for (const b of ['spine', 'chest', 'neck', 'head']) {
+    assert.ok(maxDiff(on.pose[b], off.pose[b]) < 1e-15, `${b} 不该被左右交换影响`);
+  }
 });
 
 test('swapLeftRight 不影响中线骨骼（脊柱/头颈）', () => {
@@ -191,6 +242,34 @@ test('★ 校准：中立输入经校准后精确等于 BASE_STANDING_POSE', () 
       maxDiff(target[b], expected) < 1e-9,
       `${b} 中立输入应得到基础站姿，实际偏差 ${maxDiff(target[b], expected).toExponential(2)}`,
     );
+  }
+});
+
+test('★★ 静息不变式的推论：两种左右配置下，校准修正量都应当很小', () => {
+  // 因为 Kalidokit 的静息 ≈ 我们的静息，所以 corrections 接近单位旋转。
+  // 一旦"用错来源键 / 符号没跟着换"，修正量会突然变成 100° 以上 ——
+  // 这条不变式能立刻把那种情况顶出来，而不必等到看渲染结果。
+  // 阈值分开定，因为两段的"应有偏差"不同：
+  //   上臂：Kalidokit 静息 z = ∓1.25，我们 = ±72° ≈ ±1.257 → 应几乎为 0
+  //   前臂：Kalidokit 静息 z = 0，而我们的基础站姿有 8° 自然屈肘
+  //         （BASE_STANDING_POSE 的 NATURAL_ELBOW_DEG）→ 应有约 8° 的修正，
+  //         这是**正确**的，不是 bug
+  const limits = { rightUpperArm: 5, leftUpperArm: 5, rightLowerArm: 15, leftLowerArm: 15 };
+  const seen = {};
+  for (const swap of [false, true]) {
+    const neutral = retarget({ pose: KALIDOKIT_REST }, swap).pose;
+    const corrections = computeCorrections(neutral);
+    for (const [bone, limit] of Object.entries(limits)) {
+      const deg = angleBetween(corrections[bone], [0, 0, 0, 1]);
+      assert.ok(deg < limit, `swap=${swap} 时 ${bone} 的修正量 ${deg.toFixed(2)}° 超过 ${limit}°`);
+      seen[`${bone}:${swap}`] = deg;
+    }
+  }
+  // 上臂必须几乎为 0 —— 一旦"用错来源键 / 符号没跟着换"这里会变成 140° 以上
+  for (const swap of [false, true]) {
+    for (const bone of ['rightUpperArm', 'leftUpperArm']) {
+      assert.ok(seen[`${bone}:${swap}`] < 1, `swap=${swap} 时 ${bone} 修正量应接近 0，实际 ${seen[`${bone}:${swap}`].toFixed(2)}°`);
+    }
   }
 });
 

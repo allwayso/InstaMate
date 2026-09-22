@@ -181,6 +181,28 @@ export default function MotionLibraryPage() {
     };
   }, []);
 
+  /**
+   * 切换左右映射会**作废校准**。
+   *
+   * 因为修正量是按当时的映射算出来的：Qcorrection = Qbase × inverse(Qneutral)，
+   * 而 Qneutral 来自「哪个 Kalidokit 键驱动哪根骨骼」。
+   * 换了映射还用旧修正量，等于把错误偏移叠在新映射上 ——
+   * 表现就是"左右对了但上下反了"这种局部看起来没道理的现象。
+   */
+  useEffect(() => {
+    correctionsRef.current = null;
+    setCalibration(null);
+    smootherRef.current?.reset();
+    if (stateRef.current === 'ready' || stateRef.current === 'calibrating') {
+      setStateBoth('detecting');
+    }
+    if (stateRef.current !== 'camera-off') {
+      setNotice({ kind: 'warn', text: '左右映射已切换，请重新校准（1.5 秒）' });
+    }
+    // 只应在 swap 变化时触发，不要依赖其它状态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swap]);
+
   const ensureSmoother = useCallback(() => {
     if (!smootherRef.current) smootherRef.current = new PoseSmoother({ basePose: base });
     return smootherRef.current;
@@ -717,10 +739,15 @@ export default function MotionLibraryPage() {
                   : `未通过：${calibration.issues.join('；')}`}
               </div>
             )}
-            <label className="swap-toggle">
+            <label className="swap-toggle" title="切换后会自动作废校准，需要重新校准 1.5 秒">
               <input type="checkbox" checked={swap} onChange={(e) => setSwap(e.target.checked)} />
               左右交换（标定用）
             </label>
+            {swap !== DEFAULT_SWAP && (
+              <span className="hint">
+                已偏离默认值，切换后需重新校准
+              </span>
+            )}
           </div>
 
           <div className="record-box">
