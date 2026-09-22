@@ -1,0 +1,582 @@
+/**
+ * G2 纯逻辑测试（一）：重定向、校准、平滑、置信度、显示映射。
+ *
+ * 全部离线 —— 不需要摄像头、不需要 VRM、不需要浏览器。
+ * 这是刻意的：真人动捕最难的部分是数学，而数学不该依赖硬件才能验证。
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  eulerXYZToQuat,
+  mapEuler,
+  retarget,
+  resolveRules,
+  RETARGET_RULES,
+  RETARGET_TARGET_BONES,
+  RETARGET_IS_MEASURED,
+} from '../web/lib/mocap/retarget-profile.ts';
+import {
+  applyCalibration,
+  averageQuats,
+  averagePose,
+  computeCorrections,
+  quatInverse,
+  CalibrationSession,
+  CALIBRATION_REQUIRED_BONES,
+} from '../web/lib/mocap/calibration.ts';
+import {
+  computeSourceConfidence,
+  computeBoneConfidence,
+  faceConfidence,
+  isBodyTracked,
+  PoseSmoother,
+  KALIDOKIT_SOURCE_POINTS,
+} from '../web/lib/mocap/smoothing.ts';
+import {
+  toDisplayX,
+  toCanvasPoint,
+  isDrawable,
+  confidenceColor,
+  MODEL_INPUT_MIRRORED,
+} from '../web/lib/mocap/display-mapping.ts';
+import { MOCAP_LIMITS } from '../web/lib/mocap/mocap-types.ts';
+import { BASE_STANDING_POSE, baseQuatOf, mulQ } from '../web/lib/pose.ts';
+
+const D = Math.PI / 180;
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+const maxDiff = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+// 真正的旋转夹角（与 three.js 的 Quaternion.angleTo 同口径）。
+// 注意 quaternion 的 dot 是 cos(θ/2)，所以角度要乘 2 —— 早先漏了这个 2，
+// 于是「与 Rz*Ry*Rx 差 44.9°」被算成 22.45°，断言阈值全部失真。
+const angleBetween = (a, b) => (2 * Math.acos(Math.min(1, Math.abs(dot(a, b))))) / D;
+
+// ── 1. 欧拉约定必须与 three.js 一致 ──────────────────────────────────────
+
+/**
+ * 由 three.js 0.186.0 的 `new Euler(x,y,z,'XYZ')` 生成的标准值。
+ * 锚在这里的原因：Kalidokit 的设计前提就是「把这三个数直接赋给 three.js 的 rotation」，
+ * 所以我们的欧拉→四元数转换必须与 three.js 完全一致，差一点点都会让所有动作静默偏转。
+ * 测试文件在仓库根，引不到 web/node_modules/three，所以用冻结的参考值。
+ */
+const EULER_XYZ_REFERENCE = [
+  [[0, 0, 0], [0, 0, 0, 1]],
+  [[30, 0, 0], [0.2588190451, 0, 0, 0.9659258263]],
+  [[0, 40, 0], [0, 0.3420201433, 0, 0.9396926208]],
+  [[0, 0, 50], [0, 0, 0.4226182617, 0.906307787]],
+  [[30, 40, 50], [0.3600421737, 0.1966282255, 0.4638269103, 0.7852207151]],
+  [[-20, 10, -35], [-0.1907910851, 0.029840788, -0.3094444786, 0.9311027891]],
+  [[90, 0, 0], [0.7071067812, 0, 0, 0.7071067812]],
+  [[0, 180, 0], [0, 1, 0, 0]],
+  [[12.5, -47.25, 33.75], [-0.0201921718, -0.410167097, 0.2226249227, 0.884190801]],
+];
+
+test('欧拉 XYZ → 四元数与 three.js 完全一致（约定锚点）', () => {
+  for (const [[x, y, z], expected] of EULER_XYZ_REFERENCE) {
+    const got = eulerXYZToQuat({ x: x * D, y: y * D, z: z * D });
+    assert.ok(
+      maxDiff(got, expected) < 1e-9,
+      `euler(${x},${y},${z}) 偏差过大：${maxDiff(got, expected).toExponential(2)}`,
+    );
+  }
+});
+
+test('欧拉 XYZ 是 Rx×Ry×Rz，不是 Rz×Ry×Rx', () => {
+  // 若实现写反成 Rz×Ry×Rx，会差出几十度 —— 而"看起来还是动了"，极易漏过
+  const got = eulerXYZToQuat({ x: 30 * D, y: 40 * D, z: 50 * D });
+  const reversed = [0.080805, 0.402198, 0.303372, 0.860042];
+  assert.ok(angleBetween(got, reversed) > 30, '与 Rz×Ry×Rx 的差异应当很大（证明没写反）');
+});
+
+// ── 2. 轴映射与权重（只锁机制，不锁具体轴向）────────────────────────────
+
+test('轴映射与符号按规则生效', () => {
+  const src = { x: 1, y: 2, z: 3 };
+  assert.deepEqual(mapEuler(src, [{ axis: 'z', sign: -1 }, { axis: 'y', sign: 1 }, { axis: 'x', sign: 1 }]), {
+    x: -3,
+    y: 2,
+    z: 1,
+  });
+});
+
+test('每根目标骨骼都有规则，且来源键是已知的 Kalidokit 键', () => {
+  const known = new Set(['Spine', 'Face.head', ...Object.keys(KALIDOKIT_SOURCE_POINTS)]);
+  for (const bone of RETARGET_TARGET_BONES) {
+    const rule = RETARGET_RULES[bone];
+    assert.ok(rule, `${bone} 没有规则`);
+    assert.ok(known.has(rule.from), `${bone} 的来源键 ${rule.from} 不是已知的 Kalidokit 键`);
+  }
+});
+
+test('脊柱 35/65、头颈 35/65 权重拆分正确', () => {
+  const src = { Spine: { x: 0, y: 0.2, z: 0 }, };
+  const face = { head: { x: 0, y: 0.2, z: 0 } };
+  const out = retarget({ pose: src, face }, false);
+
+  // 同一来源、同一轴映射 → chest 的旋转角应当是 spine 的 65/35 倍
+  const spineDeg = 2 * Math.acos(Math.min(1, Math.abs(out.pose.spine[3]))) / D;
+  const chestDeg = 2 * Math.acos(Math.min(1, Math.abs(out.pose.chest[3]))) / D;
+  assert.ok(Math.abs(spineDeg - 0.2 * 0.35 / D) < 1e-6, `spine 权重不对：${spineDeg}`);
+  assert.ok(Math.abs(chestDeg - 0.2 * 0.65 / D) < 1e-6, `chest 权重不对：${chestDeg}`);
+
+  const neckDeg = 2 * Math.acos(Math.min(1, Math.abs(out.pose.neck[3]))) / D;
+  const headDeg = 2 * Math.acos(Math.min(1, Math.abs(out.pose.head[3]))) / D;
+  assert.ok(Math.abs(neckDeg - 0.2 * 0.35 / D) < 1e-6, `neck 权重不对：${neckDeg}`);
+  assert.ok(Math.abs(headDeg - 0.2 * 0.65 / D) < 1e-6, `head 权重不对：${headDeg}`);
+});
+
+test('来源缺失时记进 missing，且不产出该骨骼（不伪造单位四元数）', () => {
+  const out = retarget({ pose: { RightUpperArm: { x: 0, y: 0, z: 0 } } }, false);
+  assert.deepEqual(Object.keys(out.pose), ['rightUpperArm']);
+  assert.ok(out.missing.includes('leftUpperArm'));
+  assert.ok(out.missing.includes('spine'));
+  assert.ok(!('leftUpperArm' in out.pose), '缺来源的骨骼不应出现在姿态里');
+});
+
+test('肩骨不进入 G2 驱动范围（保持基础站姿，避免抖）', () => {
+  assert.ok(!RETARGET_TARGET_BONES.includes('rightShoulder'));
+  assert.ok(!RETARGET_TARGET_BONES.includes('leftShoulder'));
+});
+
+// ── 3. 左右交换开关 ─────────────────────────────────────────────────────
+
+test('swapLeftRight 打开时，成对骨骼整条规则对调', () => {
+  const src = {
+    RightUpperArm: { x: 0.1, y: 0.2, z: -1.0 },
+    LeftUpperArm: { x: 0.05, y: 0.3, z: 1.0 },
+    RightLowerArm: { x: 0, y: 0, z: 0.3 },
+    LeftLowerArm: { x: 0, y: 0, z: -0.3 },
+  };
+  const off = retarget({ pose: src }, false);
+  const on = retarget({ pose: src }, true);
+
+  // 开着交换时，rightUpperArm 的结果必须等于关着时 leftUpperArm 的结果
+  assert.ok(maxDiff(on.pose.rightUpperArm, off.pose.leftUpperArm) < 1e-12);
+  assert.ok(maxDiff(on.pose.leftUpperArm, off.pose.rightUpperArm) < 1e-12);
+  assert.ok(maxDiff(on.pose.rightLowerArm, off.pose.leftLowerArm) < 1e-12);
+  assert.ok(maxDiff(on.pose.leftLowerArm, off.pose.rightLowerArm) < 1e-12);
+});
+
+test('swapLeftRight 不影响中线骨骼（脊柱/头颈）', () => {
+  const src = { Spine: { x: 0.1, y: 0.2, z: 0.3 } };
+  const face = { head: { x: 0.1, y: 0.2, z: 0.3 } };
+  const off = retarget({ pose: src, face }, false);
+  const on = retarget({ pose: src, face }, true);
+  for (const b of ['spine', 'chest', 'neck', 'head']) {
+    assert.ok(maxDiff(on.pose[b], off.pose[b]) < 1e-15, `${b} 不该被左右交换影响`);
+  }
+});
+
+test('resolveRules 不修改原始规则表（避免污染全局状态）', () => {
+  const before = JSON.stringify(RETARGET_RULES.rightUpperArm);
+  resolveRules(true);
+  assert.equal(JSON.stringify(RETARGET_RULES.rightUpperArm), before);
+});
+
+// ── 4. ★ 校准恒等式：中立输入必须得到基础站姿 ──────────────────────────
+
+test('★ 校准：中立输入经校准后精确等于 BASE_STANDING_POSE', () => {
+  // 造一个"中立姿态"：故意用真实形状的数（Kalidokit 的 rig 空间量级）
+  const neutral = {};
+  for (const b of RETARGET_TARGET_BONES) {
+    neutral[b] = eulerXYZToQuat({ x: 0.13 * (b.length % 3), y: -0.21, z: 0.37 });
+  }
+
+  const corrections = computeCorrections(neutral);
+  const target = applyCalibration(neutral, corrections);
+
+  for (const b of RETARGET_TARGET_BONES) {
+    const expected = baseQuatOf(b);
+    assert.ok(
+      maxDiff(target[b], expected) < 1e-9,
+      `${b} 中立输入应得到基础站姿，实际偏差 ${maxDiff(target[b], expected).toExponential(2)}`,
+    );
+  }
+});
+
+test('★ 校准：非中立输入会偏离基础站姿（证明校准不是恒等变换）', () => {
+  const neutral = {};
+  for (const b of RETARGET_TARGET_BONES) neutral[b] = eulerXYZToQuat({ x: 0.13, y: -0.21, z: 0.37 });
+  const corrections = computeCorrections(neutral);
+
+  // 抬手 30°（绕 Z）
+  const moved = { ...neutral, rightUpperArm: eulerXYZToQuat({ x: 0.13, y: -0.21, z: 0.37 + 30 * D }) };
+  const out = applyCalibration(moved, corrections);
+  assert.ok(
+    angleBetween(out.rightUpperArm, baseQuatOf('rightUpperArm')) > 25,
+    '抬手 30° 后应当明显偏离基础站姿',
+  );
+});
+
+test('★ 校准：没拿到修正量的骨骼原样返回（不静默弹回 T-pose）', () => {
+  const q = eulerXYZToQuat({ x: 0.1, y: 0.2, z: 0.3 });
+  const out = applyCalibration({ someBone: q }, {});
+  assert.ok(maxDiff(out.someBone, q) < 1e-15);
+});
+
+test('quatInverse 与 q 相乘得到单位四元数', () => {
+  // 注意：这里要的是**四元数乘积** q × q⁻¹ = [0,0,0,1]，
+  // 不是点积 q·q⁻¹（后者 = 2w²−1，一般不等于 1 —— 早先就写错成这个了）
+  const q = eulerXYZToQuat({ x: 0.4, y: -0.9, z: 1.7 });
+  const prod = mulQ(q, quatInverse(q));
+  assert.ok(maxDiff(prod, [0, 0, 0, 1]) < 1e-12, `q×q⁻¹ 应为单位四元数，实际 ${prod}`);
+  // 反证：点积并不等于 1（说明上一条不是碰巧通过）
+  assert.ok(Math.abs(dot(q, quatInverse(q)) - 1) > 1e-3, '点积与乘积是两回事');
+});
+
+// ── 5. 四元数平均必须先统一符号 ────────────────────────────────────────
+
+test('★ 四元数平均：混入取负的样本不影响结果', () => {
+  const q = eulerXYZToQuat({ x: 0.3, y: 0.6, z: -0.2 });
+  const neg = q.map((v) => -v);
+
+  const avg = averageQuats([q, q, q]);
+  assert.ok(Math.abs(Math.abs(dot(avg, q)) - 1) < 1e-9, '同号平均应等于自身');
+
+  const mixed = averageQuats([q, neg, q, neg]);
+  assert.ok(
+    Math.abs(Math.abs(dot(mixed, q)) - 1) < 1e-9,
+    `符号不一致时平均结果应当仍是 q，实际夹角 ${angleBetween(mixed, q).toFixed(3)}°`,
+  );
+});
+
+test('四元数平均：不统一符号的实现会退化（反证上一条不是白测的）', () => {
+  const q = eulerXYZToQuat({ x: 0.3, y: 0.6, z: -0.2 });
+  const neg = q.map((v) => -v);
+  // 直接算术平均（错误做法）：q + (-q) = 0，归一化后方向随机
+  const naive = [0, 1, 2, 3].map((i) => (q[i] + neg[i]) / 2);
+  const naiveNorm = Math.hypot(...naive);
+  assert.ok(naiveNorm < 1e-12, '天真平均的范数应当塌成 0');
+  // 而我们的实现不会塌
+  assert.ok(Math.abs(Math.hypot(...averageQuats([q, neg]))) - 1 < 1e-9);
+});
+
+test('averagePose 跳过缺失骨骼，不凭空造值', () => {
+  const q1 = eulerXYZToQuat({ x: 0.1, y: 0, z: 0 });
+  const p = averagePose([{ head: q1 }, { head: q1, chest: q1 }]);
+  assert.deepEqual(Object.keys(p).sort(), ['chest', 'head']);
+});
+
+// ── 6. 校准采样窗口的门槛 ──────────────────────────────────────────────
+
+// n 与 stepMs 必须让总时长 >= 1500ms：(n-1)*stepMs。
+// 早先用 n=60/step=25 只有 1475ms，测试因为自己的数据不足而失败。
+function mkCalibrationFrames({ n = 65, tracked = true, confidence = 0.9, stepMs = 25 }) {
+  const q = eulerXYZToQuat({ x: 0.13, y: -0.21, z: 0.37 });
+  const canonical = {};
+  for (const b of RETARGET_TARGET_BONES) canonical[b] = q;
+  const conf = {};
+  for (const b of RETARGET_TARGET_BONES) conf[b] = confidence;
+  const frames = [];
+  for (let i = 0; i < n; i++) {
+    frames.push({ timestampMs: i * stepMs, tracked, confidence: conf, canonical });
+  }
+  return frames;
+}
+
+function runCalibration(frames) {
+  const s = new CalibrationSession();
+  s.start(0);
+  for (const f of frames) s.add(f);
+  return s.finish();
+}
+
+test('校准：检测率与时长都达标时通过，并给出中立姿态与修正量', () => {
+  const out = runCalibration(mkCalibrationFrames({}));
+  assert.equal(out.ok, true, `不该失败：${out.issues.join('; ')}`);
+  assert.ok(out.detectionRate >= MOCAP_LIMITS.calibrationMinDetectionRate);
+  assert.ok(Object.keys(out.neutralPose).length === RETARGET_TARGET_BONES.length);
+  assert.ok(Object.keys(out.corrections).length === RETARGET_TARGET_BONES.length);
+});
+
+test('校准：检测率不足 80% 必须拒绝', () => {
+  // 每 5 帧丢 2 帧 → 60% 检测率
+  const frames = mkCalibrationFrames({ n: 60 });
+  frames.forEach((f, i) => {
+    if (i % 5 >= 3) f.tracked = false;
+  });
+  const out = runCalibration(frames);
+  assert.equal(out.ok, false);
+  assert.ok(out.issues.some((s) => s.includes('身体检测率')), '应当报检测率不足');
+});
+
+test('校准：时长不足必须拒绝', () => {
+  const out = runCalibration(mkCalibrationFrames({ n: 10, stepMs: 25 })); // 只有 225ms
+  assert.equal(out.ok, false);
+  assert.ok(out.issues.some((s) => s.includes('时长不足')));
+});
+
+test('校准：肩肘腕置信度不足的帧被排除出平均，并在 issues 里说清', () => {
+  const frames = mkCalibrationFrames({ n: 60 });
+  frames.forEach((f, i) => {
+    if (i < 10) for (const b of CALIBRATION_REQUIRED_BONES) f.confidence[b] = 0.1;
+  });
+  const out = runCalibration(frames);
+  assert.equal(out.ok, false);
+  assert.ok(out.issues.some((s) => s.includes('置信度不足')));
+});
+
+test('校准：一帧都没有时给出明确原因而不是崩溃', () => {
+  const out = runCalibration([]);
+  assert.equal(out.ok, false);
+  assert.ok(out.issues[0].includes('没有收到任何帧'));
+  assert.deepEqual(out.corrections, {});
+});
+
+// ── 7. 置信度必须跟着 Kalidokit 的索引走 ───────────────────────────────
+
+test('★ 置信度索引跟随 Kalidokit 源码：Right* 读 MediaPipe 的 left_* 点', () => {
+  // 这条断言的价值：一旦有人"顺手改成看着更合理的 12/14"，右臂置信度就会
+  // 去评估左臂，出现"正确的那条手臂因为另一条被遮挡而停止更新"的怪 bug。
+  assert.deepEqual(KALIDOKIT_SOURCE_POINTS.RightUpperArm, [11, 13]);
+  assert.deepEqual(KALIDOKIT_SOURCE_POINTS.LeftUpperArm, [12, 14]);
+  assert.deepEqual(KALIDOKIT_SOURCE_POINTS.RightLowerArm, [13, 15]);
+  assert.deepEqual(KALIDOKIT_SOURCE_POINTS.LeftLowerArm, [14, 16]);
+  assert.deepEqual(KALIDOKIT_SOURCE_POINTS.Spine, [11, 12, 23, 24]);
+});
+
+function mkFrame({ visAll = 1, leftOnly = false } = {}) {
+  const mk = (v) => Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: v }));
+  const w = mk(visAll);
+  const p = mk(visAll);
+  if (leftOnly) {
+    // 只压低 MediaPipe 的左侧点（11/13/15）
+    for (const i of [11, 13, 15]) {
+      w[i].visibility = 0.1;
+      p[i].visibility = 0.1;
+    }
+  }
+  return {
+    timestampMs: 0,
+    poseLandmarks: p,
+    poseWorldLandmarks: w,
+    leftHandLandmarks: Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: visAll })),
+    rightHandLandmarks: Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: visAll })),
+    faceLandmarks: Array.from({ length: 468 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: visAll })),
+  };
+}
+
+test('压低 MediaPipe 左手点 → Kalidokit 的 Right* 置信度下降（Left* 不受影响）', () => {
+  const ok = computeSourceConfidence(mkFrame());
+  const bad = computeSourceConfidence(mkFrame({ leftOnly: true }));
+  assert.ok(ok.RightUpperArm > 0.9);
+  assert.ok(bad.RightUpperArm < 0.2, `Kalidokit 的 RightUpperArm 应当跟着 MP 左手点掉下来，实际 ${bad.RightUpperArm}`);
+  assert.ok(bad.LeftUpperArm > 0.9, 'Kalidokit 的 LeftUpperArm 读 MP 右手点，不该受影响');
+});
+
+test('computeBoneConfidence 跟随左右交换开关', () => {
+  const frame = mkFrame({ leftOnly: true });
+  const off = computeBoneConfidence(frame, false);
+  const on = computeBoneConfidence(frame, true);
+  assert.ok(off.rightUpperArm < 0.2, '不交换时 rightUpperArm 取 Kalidokit 的 Right*');
+  assert.ok(on.rightUpperArm > 0.9, '交换后 rightUpperArm 应改取 Kalidokit 的 Left*（即 MP 右手点）');
+});
+
+test('手部关键点整体缺失时手部置信度打折（不假装完全可信）', () => {
+  const frame = mkFrame();
+  frame.leftHandLandmarks = null;
+  const c = computeSourceConfidence(frame);
+  assert.ok(c.RightHand <= 0.6 + 1e-9, '缺手部点时上限应为 0.6');
+});
+
+test('面部点缺失/过少 → 头颈置信度低', () => {
+  const full = mkFrame();
+  assert.ok(faceConfidence(full) > 0.9);
+  const none = mkFrame();
+  none.faceLandmarks = null;
+  assert.equal(faceConfidence(none), 0);
+  const few = mkFrame();
+  few.faceLandmarks = few.faceLandmarks.slice(0, 30);
+  assert.ok(faceConfidence(few) < 0.3, '点太少说明检测不完整，置信度应当低');
+});
+
+test('isBodyTracked：缺 world landmarks 或肩肘腕不可见都算没检到', () => {
+  assert.equal(isBodyTracked(mkFrame()), true);
+  const noWorld = mkFrame();
+  noWorld.poseWorldLandmarks = null;
+  assert.equal(isBodyTracked(noWorld), false);
+  const noWrist = mkFrame();
+  noWrist.poseLandmarks[15].visibility = 0;
+  assert.equal(isBodyTracked(noWrist), false);
+});
+
+// ── 8. 低置信度三级回退 ────────────────────────────────────────────────
+
+function mkSmoother() {
+  return new PoseSmoother({ basePose: BASE_STANDING_POSE });
+}
+
+// 故意选一个与基础站姿距离很远的姿态。
+// 基础站姿的右臂是绕 Z 转 +72°；早先测试样本也用纯 Z 小角度（1.2rad≈68.8°），
+// 两者只差 3°，于是"保持/渐变/丢失"三档在数值上几乎没区别，断言全失去意义。
+const FAR = eulerXYZToQuat({ x: -50 * D, y: 40 * D, z: 0 });
+
+test('平滑样本与基础站姿有足够距离（保证后面三档断言有意义）', () => {
+  const d = angleBetween(FAR, baseQuatOf('rightUpperArm'));
+  assert.ok(d > 40, `样本离基础站姿只有 ${d.toFixed(1)}°，三档回退测不出来`);
+});
+
+test('★ 平滑输出必须覆盖 canonical 里的全部骨骼（不能只覆盖基础站姿的 4 根）', () => {
+  const s = mkSmoother();
+  const canonical = {};
+  for (const b of RETARGET_TARGET_BONES) canonical[b] = FAR;
+  const out = s.update(canonical, Object.fromEntries(RETARGET_TARGET_BONES.map((b) => [b, 1])), 0, 16);
+  assert.deepEqual(
+    Object.keys(out.pose).sort(),
+    [...RETARGET_TARGET_BONES].sort(),
+    '漏骨的写法会让脊柱与头永远不动，而且不报错',
+  );
+  assert.equal(s.getBoneNames().length, RETARGET_TARGET_BONES.length);
+});
+
+test('平滑：有效帧进入 tracked，并朝样本收敛', () => {
+  const s = mkSmoother();
+  const canonical = { rightUpperArm: FAR };
+  const conf = { rightUpperArm: 1 };
+  let out;
+  for (let i = 0; i < 40; i++) out = s.update(canonical, conf, i * 16, 16);
+  assert.equal(out.tiers.rightUpperArm, 'tracked');
+  assert.ok(
+    angleBetween(out.pose.rightUpperArm, canonical.rightUpperArm) < 3,
+    '反复喂同一个样本后应当基本收敛过去',
+  );
+});
+
+test('★ 平滑：≤200ms 保持上一有效姿态', () => {
+  const s = mkSmoother();
+  const canonical = { rightUpperArm: FAR };
+  for (let i = 0; i < 60; i++) s.update(canonical, { rightUpperArm: 1 }, i * 16, 16);
+  const before = s.update(canonical, { rightUpperArm: 1 }, 960, 16).pose.rightUpperArm;
+
+  // 连续 200ms 低置信度
+  let out;
+  for (const t of [976, 1050, 1160]) out = s.update(null, {}, t, 100);
+  assert.equal(out.tiers.rightUpperArm, 'hold');
+  assert.ok(
+    angleBetween(out.pose.rightUpperArm, before) < 15,
+    `保持档不该明显移动，实际偏移 ${angleBetween(out.pose.rightUpperArm, before).toFixed(1)}°`,
+  );
+});
+
+test('★ 平滑：200–500ms 向基础姿态渐变', () => {
+  const s = mkSmoother();
+  const canonical = { rightUpperArm: FAR };
+  for (let i = 0; i < 60; i++) s.update(canonical, { rightUpperArm: 1 }, i * 16, 16);
+  const held = s.update(canonical, { rightUpperArm: 1 }, 960, 16).pose.rightUpperArm;
+
+  let out;
+  for (const t of [1176, 1300, 1400]) out = s.update(null, {}, t, 100);
+  assert.equal(out.tiers.rightUpperArm, 'blend');
+  const toBase = angleBetween(out.pose.rightUpperArm, baseQuatOf('rightUpperArm'));
+  const startedFrom = angleBetween(held, baseQuatOf('rightUpperArm'));
+  assert.ok(toBase < startedFrom, '渐变档应当比刚开始更靠近基础姿态');
+  assert.ok(toBase > 5, '渐变还没走完，不该已经到基础姿态');
+});
+
+test('★ 平滑：>500ms 标记为跟踪丢失并回到基础姿态', () => {
+  const s = mkSmoother();
+  const canonical = { rightUpperArm: eulerXYZToQuat({ x: 0, y: 0, z: 1.2 }) };
+  for (let i = 0; i < 60; i++) s.update(canonical, { rightUpperArm: 1 }, i * 16, 16);
+
+  let out;
+  for (const t of [1200, 1400, 1600, 2000, 2400, 2800]) out = s.update(null, {}, t, 200);
+  assert.equal(out.tiers.rightUpperArm, 'lost');
+  assert.ok(out.lost.includes('rightUpperArm'));
+  assert.ok(
+    angleBetween(out.pose.rightUpperArm, baseQuatOf('rightUpperArm')) < 2,
+    '丢失档应当已经回到基础姿态',
+  );
+});
+
+test('平滑：恢复有效后立刻回到 tracked 并清掉丢失标记', () => {
+  const s = mkSmoother();
+  for (const t of [0, 200, 400, 600, 800]) s.update(null, {}, t, 200);
+  assert.ok(s.update(null, {}, 1000, 200).lost.length > 0);
+
+  const canonical = { rightUpperArm: eulerXYZToQuat({ x: 0, y: 0, z: 1.2 }) };
+  const out = s.update(canonical, { rightUpperArm: 1 }, 1200, 200);
+  assert.equal(out.tiers.rightUpperArm, 'tracked');
+  assert.ok(!out.lost.includes('rightUpperArm'));
+  // 注意不能断言 getLostBones() 为空：只喂了 rightUpperArm 一个骨骼，
+  // 另一条手臂本就一直没有有效样本，仍处于 lost 是正确行为。
+  assert.ok(!s.getLostBones().includes('rightUpperArm'));
+});
+
+test('平滑：指数系数与帧率无关（16ms×10 与 160ms×1 结果接近）', () => {
+  const run = (steps) => {
+    const s = mkSmoother();
+    const canonical = { rightUpperArm: FAR };
+    let out;
+    let t = 0;
+    for (const dt of steps) {
+      t += dt;
+      out = s.update(canonical, { rightUpperArm: 1 }, t, dt);
+    }
+    return out.pose.rightUpperArm;
+  };
+  // 注意：低置信度计时与档位判定是按时长的，所以这里两边都保持有效，只比平滑系数
+  const fine = run(Array(10).fill(16));
+  const coarse = run([16, 16, 16, 16, 16, 16, 16, 16, 16, 16]);
+  assert.ok(maxDiff(fine, coarse) < 1e-12, '同一步长序列必须完全确定');
+});
+
+test('平滑：reset 后回到基础姿态', () => {
+  const s = mkSmoother();
+  const canonical = { rightUpperArm: FAR };
+  for (let i = 0; i < 40; i++) s.update(canonical, { rightUpperArm: 1 }, i * 16, 16);
+  s.reset();
+  const out = s.update(null, {}, 1000, 16);
+  assert.ok(maxDiff(out.pose.rightUpperArm, baseQuatOf('rightUpperArm')) < 1e-12);
+});
+
+// ── 9. ★ 画面镜像不得影响模型输入 ──────────────────────────────────────
+
+test('★ 模型输入恒不镜像（常量，不是可配置项）', () => {
+  assert.equal(MODEL_INPUT_MIRRORED, false);
+});
+
+test('★ 镜像只改显示坐标，不改关键点数据本身', () => {
+  const lm = { x: 0.2, y: 0.3, z: 0.4, visibility: 0.9 };
+  const snapshot = JSON.stringify(lm);
+
+  const notMirrored = toDisplayX(lm.x, false);
+  const mirrored = toDisplayX(lm.x, true);
+
+  assert.equal(notMirrored, 0.2);
+  assert.equal(mirrored, 0.8);
+  assert.equal(JSON.stringify(lm), snapshot, '显示变换绝不能改动原始关键点');
+});
+
+test('镜像只翻 x，不翻 y', () => {
+  const a = toCanvasPoint(0.25, 0.25, 640, 480, true);
+  const b = toCanvasPoint(0.25, 0.25, 640, 480, false);
+  assert.equal(a.y, b.y, 'y 不该被镜像影响');
+  assert.equal(a.x, 480);
+  assert.equal(b.x, 160);
+});
+
+test('显示坐标被夹在 [0,1]，越界关键点不会画出画面外', () => {
+  assert.equal(toDisplayX(-0.5, false), 0);
+  assert.equal(toDisplayX(1.5, false), 1);
+  assert.equal(toDisplayX(1.5, true), 0);
+});
+
+test('缺失判定用 null 而不是 0（0 是合法坐标）', () => {
+  assert.equal(isDrawable({ x: 0, y: 0, z: null, visibility: 0 }), true, 'x=0/y=0 是合法点');
+  assert.equal(isDrawable({ x: null, y: 0, z: 0, visibility: 1 }), false);
+  assert.equal(isDrawable(null), false);
+});
+
+test('置信度配色分三档：正常 / 偏低(<0.5) / 严重丢失', () => {
+  assert.equal(confidenceColor(0.9, '#00f').level, 'ok');
+  assert.equal(confidenceColor(0.9, '#00f').color, '#00f');
+  assert.equal(confidenceColor(0.4, '#00f').level, 'low');
+  assert.equal(confidenceColor(null, '#00f').level, 'lost');
+  assert.equal(confidenceColor(0.05, '#00f').level, 'lost');
+});
+
+test('重定向档案必须显式声明"是否已实测"（防止未验证的映射被当结论）', () => {
+  assert.equal(typeof RETARGET_IS_MEASURED, 'boolean');
+  // P3 实测完成后这里会变成 true；在此之前页面必须显示警告
+  assert.equal(RETARGET_IS_MEASURED, false, 'P3 标定完成前不应为 true');
+});
