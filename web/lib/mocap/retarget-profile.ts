@@ -298,10 +298,27 @@ const HAND_AXES: Record<'right' | 'left', AxisTriple> = {
   left: [ax('x', 1), ax('y', 1), ax('z', 1)],
 };
 
-/** 腕部：X=自转、Y=尺桡偏、Z=屈伸。Kalidokit 的 Wrist 顺序是 x=twist / z=左右，故 Y←z、Z←y */
+/**
+ * 腕部：X=自转（旋前/旋后）、Y=尺桡偏、Z=屈伸。
+ * Kalidokit 的 Wrist 顺序是 x=twist / z=左右，故 **Y←z、Z←y**。
+ *
+ * ★ X 的符号取 −1（两侧同号），依据：
+ *   · Kalidokit：`Wrist.x = clamp(x * 2 * invert, ...)` → 右侧 ×2、左侧 ×−2，
+ *     两侧**相反**
+ *   · 我们的 rig：右臂长轴 +X、左臂长轴 −X（T-pose 向两侧伸展），
+ *     同一个物理拧转在两边的坐标符号也**相反**
+ *   → "相反"对上"相反"，所以基准符号应当**两侧同号**。
+ *     （对比：手指的弯曲我们两侧都是 +Z，而 Kalidokit 是右负左正 →
+ *      那边的基准符号就必须两侧异号。判断依据是"两侧的约定是否同类"。)
+ *
+ * 另外 X 是镜面法线，`MIRROR_ODD_AXES` 只翻 Y/Z，所以换左右不影响自转 ——
+ * 上面这个基准值在任何 swapLeftRight 配置下都生效。
+ *
+ * 实测反馈：初值写 +1 时"手腕相对于前臂的旋转是反的"（用户实机）。改为 −1。
+ */
 const WRIST_MAP: Record<'right' | 'left', AxisTriple> = {
-  right: [ax('x', 1), ax('z', -1), ax('y', -1)],
-  left: [ax('x', 1), ax('z', 1), ax('y', 1)],
+  right: [ax('x', -1), ax('z', -1), ax('y', -1)],
+  left: [ax('x', -1), ax('z', 1), ax('y', 1)],
 };
 
 /** 拇指：Kalidokit 的 z 是弯曲主力，x/y 是做对掌的修正项 */

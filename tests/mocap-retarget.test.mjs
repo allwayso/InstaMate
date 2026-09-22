@@ -181,6 +181,27 @@ test('★ 手指弯曲方向：负值(右手)与正值(左手)都映射成我们
   }
 });
 
+test('★ 腕部自转（旋前/旋后）用 X 轴，且两侧同号', () => {
+  // 依据：Kalidokit 的 Wrist.x 带 invert（两侧相反），而我们的左右臂长轴也反向
+  // （右侧 +X、左侧 −X），"相反"对上"相反" → 基准符号两侧同号。
+  // 对比手指：我们两侧弯曲都是 +Z、Kalidokit 右负左正 → 那边必须两侧异号。
+  // 若有人把这里改成两侧异号，说明他以为腕部和手指一样 —— 这个断言就是为了拦住那个直觉。
+  const R = RETARGET_RULES.rightHand;
+  const L = RETARGET_RULES.leftHand;
+  assert.equal(R.axes[0].axis, 'x', '自转必须走 X 轴');
+  assert.equal(L.axes[0].axis, 'x');
+  assert.equal(R.axes[0].sign, L.axes[0].sign, '腕部自转的基准符号应当两侧同号');
+  assert.equal(R.axes[0].sign, -1);
+});
+
+test('★ 腕部三轴的语义不能被改动（X=自转 / Y=尺桡偏 / Z=屈伸）', () => {
+  // 这三个是几何探针实测出来的（绕 X 指尖只动 0.89cm 但掌法线转 40° → X 是自转）。
+  const R = RETARGET_RULES.rightHand.axes;
+  assert.equal(R[0].axis, 'x', 'X 应当取自 Kalidokit 的 Wrist.x（自转）');
+  assert.equal(R[1].axis, 'z', 'Y（尺桡偏）应当取自 Kalidokit 的 Wrist.z');
+  assert.equal(R[2].axis, 'y', 'Z（屈伸）应当取自 Kalidokit 的 Wrist.y');
+});
+
 test('★ 手部来源的 scope 必须是 hand（否则会去姿态输出里找，永远取不到）', () => {
   for (const b of ['rightHand', 'leftHand']) {
     assert.equal(RETARGET_RULES[b].scope, 'hand', `${b} 的 scope 应为 hand`);
