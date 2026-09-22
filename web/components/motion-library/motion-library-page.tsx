@@ -337,7 +337,13 @@ export default function MotionLibraryPage() {
     setCalibration(null);
     setCalibProgress(0);
     setStateBoth('calibrating');
-    setNotice({ kind: 'info', text: `保持自然站姿 ${MOCAP_LIMITS.calibrationMs / 1000} 秒…` });
+    setNotice({
+      kind: 'info',
+      text:
+        `保持自然站姿 ${MOCAP_LIMITS.calibrationMs / 1000} 秒：` +
+        `双臂自然下垂、目视前方、不要举手也不要转头 —— ` +
+        `标定姿势不对会让整段偏移算错（表现为肘反了/举不过头顶/转头反了）。`,
+    });
   }, [setStateBoth]);
 
   function finishCalibration() {
@@ -804,7 +810,7 @@ export default function MotionLibraryPage() {
             {calibration && (
               <div className={calibration.ok ? 'ok' : 'bad'}>
                 {calibration.ok
-                  ? `校准通过｜检测率 ${(calibration.detectionRate * 100).toFixed(1)}%｜帧 ${calibration.acceptedFrames}/${calibration.totalFrames}`
+                  ? `校准通过｜检测率 ${(calibration.detectionRate * 100).toFixed(1)}%｜帧 ${calibration.acceptedFrames}/${calibration.totalFrames}｜修正量 ${calibration.maxCorrectionDeg.toFixed(1)}°（${calibration.worstBone}）`
                   : `未通过：${calibration.issues.join('；')}`}
               </div>
             )}

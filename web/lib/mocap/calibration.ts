@@ -123,6 +123,47 @@ export const CALIBRATION_REQUIRED_BONES: readonly RetargetBone[] = [
 /** 关键骨骼的置信度门槛 */
 export const CALIBRATION_MIN_BONE_CONFIDENCE = 0.5;
 
+/**
+ * 修正量的容差（度）。
+ *
+ * ★ 这条是为了拦住一个很隐蔽、但破坏力极大的错误：**标定时姿势不对**。
+ *
+ * 实测踩过：标定时手臂是抬起来的，于是 Qneutral 记的是"抬手姿态"，
+ * 而 Qcorrection = Qbase × inverse(Qneutral) 把它映射成基础站姿 ——
+ * 结果是**整段偏移被算错**，表现为
+ *   · 肘部零点被平移 → 看起来像"肘反了"
+ *   · 抬臂的可用范围被偏移吃掉 → "举不过头顶"
+ *   · 转头方向也不对
+ * 而且这些症状互相矛盾，极难从渲染结果反推原因。
+ *
+ * 关键线索是：**不加校准反而是对的** —— 说明映射本身没问题，是校准量错了。
+ *
+ * 为什么能用"修正量大小"当判据：Kalidokit 的静息值与我们的静息值本来就接近
+ * （上臂 ∓1.25 rad vs ±72°，差 0.38°；前臂 0 vs 8° 的自然屈肘），
+ * 所以**姿势正确时修正量应当很小**。修正量一大，就说明标定姿势偏离了自然站姿。
+ */
+export const CALIBRATION_MAX_CORRECTION_DEG = 40;
+
+/**
+ * 参与容差检查的骨骼。
+ *
+ * 容差取 40°：足以拦住"抬着手标定"（实测抬手 55° → 修正量 54.8°），
+ * 又不会对"Kalidokit 的头部零点本来就不在正前方"这类正常差异过敏。
+ * 参考值（实测）：自然站姿下上臂 0.38°、前臂 8.00°（我们的自然屈肘）。
+ */
+const CORRECTION_CHECKED_BONES = [
+  'rightUpperArm',
+  'leftUpperArm',
+  'rightLowerArm',
+  'leftLowerArm',
+  'head',
+] as const;
+
+/** 四元数旋转角（度）。取 |w| 是为了把 q 与 −q 看成同一个旋转。 */
+function quatAngleDeg(q: Quat): number {
+  return (2 * Math.acos(Math.min(1, Math.abs(q[3])))) / (Math.PI / 180);
+}
+
 export interface CalibrationFrame {
   timestampMs: number;
   /** 该帧是否检到身体（pose + world landmarks 都在，且有足够的可见点） */
@@ -142,6 +183,10 @@ export interface CalibrationOutcome {
   acceptedFrames: number;
   totalFrames: number;
   durationMs: number;
+  /** 修正量的最大旋转角（度）。姿势正确时应当很小（上臂约 0.4°） */
+  maxCorrectionDeg: number;
+  /** 修正量最大的骨骼名 */
+  worstBone: string;
   neutralPose: Pose;
   corrections: Pose;
 }
@@ -244,6 +289,29 @@ export class CalibrationSession {
       issues.push(`以下骨骼没有可用的中立样本：${missingBones.join(', ')}`);
     }
 
+    const corrections = accepted.length ? computeCorrections(neutralPose) : {};
+
+    // ★ 校准可信度自检：修正量过大说明标定姿势不是自然站姿
+    let maxCorrectionDeg = 0;
+    let worstBone = '';
+    for (const b of CORRECTION_CHECKED_BONES) {
+      const c = corrections[b];
+      if (!c) continue;
+      const deg = quatAngleDeg(c);
+      if (deg > maxCorrectionDeg) {
+        maxCorrectionDeg = deg;
+        worstBone = b;
+      }
+    }
+    if (accepted.length && maxCorrectionDeg > CALIBRATION_MAX_CORRECTION_DEG) {
+      issues.push(
+        `校准姿态偏离自然站姿过多（${worstBone} 的修正量 ${maxCorrectionDeg.toFixed(1)}°，` +
+          `容差 ${CALIBRATION_MAX_CORRECTION_DEG}°）。` +
+          `校准时应**双臂自然下垂、目视前方**，不要举手或转头 ——` +
+          `标定姿势不对会让整段偏移算错，表现为"肘反了""举不过头顶""转头反了"这类互相矛盾的现象。`,
+      );
+    }
+
     const ok = issues.length === 0;
     return {
       ok,
@@ -252,8 +320,10 @@ export class CalibrationSession {
       acceptedFrames: accepted.length,
       totalFrames: this.frames.length,
       durationMs,
+      maxCorrectionDeg,
+      worstBone,
       neutralPose: ok ? neutralPose : {},
-      corrections: ok ? computeCorrections(neutralPose) : {},
+      corrections: ok ? corrections : {},
     };
   }
 }

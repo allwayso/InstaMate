@@ -157,6 +157,12 @@ const KALIDOKIT_REST = {
   RightHand: { x: 0, y: 0, z: 0 },
   LeftHand: { x: 0, y: 0, z: 0 },
 };
+/** 含中线骨骼的完整静息输入（校准测试要用） */
+const KALIDOKIT_REST_FULL = {
+  ...KALIDOKIT_REST,
+  Spine: { x: 0, y: 0, z: 0 },
+};
+const FACE_REST = { head: { x: 0, y: 0, z: 0 } };
 
 test('★ 静息不变式：Kalidokit 的静息值映射到我们的静息值（swap = false）', () => {
   const out = retarget({ pose: KALIDOKIT_REST }, false);
@@ -341,9 +347,10 @@ test('averagePose 跳过缺失骨骼，不凭空造值', () => {
 // n 与 stepMs 必须让总时长 >= 1500ms：(n-1)*stepMs。
 // 早先用 n=60/step=25 只有 1475ms，测试因为自己的数据不足而失败。
 function mkCalibrationFrames({ n = 65, tracked = true, confidence = 0.9, stepMs = 25 }) {
-  const q = eulerXYZToQuat({ x: 0.13, y: -0.21, z: 0.37 });
-  const canonical = {};
-  for (const b of RETARGET_TARGET_BONES) canonical[b] = q;
+  // 用**真实的 Kalidokit 静息**而不是"给所有骨骼套一个任意旋转"：
+  // 后者会让头部出现约 30° 的修正量，被校准可信度检查拦下 ——
+  // 那是测试数据不真实，不是检查太严。
+  const canonical = retarget({ pose: KALIDOKIT_REST_FULL, face: FACE_REST }, true).pose;
   const conf = {};
   for (const b of RETARGET_TARGET_BONES) conf[b] = confidence;
   const frames = [];
@@ -383,6 +390,47 @@ test('校准：时长不足必须拒绝', () => {
   const out = runCalibration(mkCalibrationFrames({ n: 10, stepMs: 25 })); // 只有 225ms
   assert.equal(out.ok, false);
   assert.ok(out.issues.some((s) => s.includes('时长不足')));
+});
+
+test('★★ 校准：标定时把手抬起来 → 必须被拒绝（这是真人踩过的坑）', () => {
+  // 实测场景：标定时手臂是抬着的，于是 Qneutral 记的是"抬手姿态"，
+  // 整段偏移被算错 —— 表现为"肘反了""举不过头顶""转头反了"，
+  // 而且这些现象互相矛盾，很难从渲染结果反推。
+  // 关键线索是"不加校准反而是对的"。
+  const K_RAISED = {
+    ...KALIDOKIT_REST_FULL,
+    RightUpperArm: { x: 0, y: 0, z: -0.3 },
+    LeftUpperArm: { x: 0, y: 0, z: 0.3 },
+  };
+  const GOOD = { ok: true, canonical: retarget({ pose: KALIDOKIT_REST_FULL, face: FACE_REST }, true).pose };
+  const BAD = { ok: true, canonical: retarget({ pose: K_RAISED, face: FACE_REST }, true).pose };
+
+  const runWith = (canonical) => {
+    const frames = [];
+    const conf = {};
+    for (const b of RETARGET_TARGET_BONES) conf[b] = 0.9;
+    for (let i = 0; i < 65; i++) {
+      frames.push({ timestampMs: i * 25, tracked: true, confidence: conf, canonical });
+    }
+    return runCalibration(frames);
+  };
+
+  const good = runWith(GOOD.canonical);
+  assert.equal(good.ok, true, `自然站姿应当通过：${good.issues.join('; ')}`);
+  // 上界取 10°：其中 8° 来自我们的自然屈肘（BASE_STANDING_POSE 的 NATURAL_ELBOW_DEG），
+  // 而 Kalidokit 的前臂静息是 0 —— 这 8° 是**正确**的，不是姿势错误。
+  // 上臂只有 0.38°（Kalidokit ∓1.25 rad vs 我们 ±72°，差 0.4°）。
+  assert.ok(good.maxCorrectionDeg < 10, `自然站姿的修正量应当很小，实际 ${good.maxCorrectionDeg.toFixed(2)}°`);
+  assert.equal(good.worstBone, 'rightLowerArm', '自然站姿下最大的修正是前臂的自然屈肘');
+
+  const bad = runWith(BAD.canonical);
+  assert.equal(bad.ok, false, '抬着手的标定姿势必须被拒绝');
+  assert.ok(
+    bad.issues.some((x) => x.includes('偏离自然站姿')),
+    `应当明确说是姿势问题：${bad.issues.join('; ')}`,
+  );
+  assert.ok(bad.maxCorrectionDeg > 30, `修正量应当明显超过容差，实际 ${bad.maxCorrectionDeg.toFixed(2)}°`);
+  assert.deepEqual(bad.corrections, {}, '被拒绝时不能给出修正量');
 });
 
 test('校准：肩肘腕置信度不足的帧被排除出平均，并在 issues 里说清', () => {
