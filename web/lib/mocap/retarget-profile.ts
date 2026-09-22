@@ -150,8 +150,30 @@ function mirrorAxes(triple: AxisTriple): AxisTriple {
  *   · 若变的是 `RightUpperArm` → 保持 false
  * 最终以 VRM 侧数值断言确认：抬右手时 `rightHand.x < 0` 侧抬高，且左手 Δ 精确为 0。
  */
-export const swapLeftRight = false;
+export const swapLeftRight = true;
 
+/**
+ * ★ 实测记录（F3 已完成）
+ *
+ * 判据与结果：
+ *   · 不交换（false）时，真人抬右手 → VRM 的**左**臂动 → 左右是反的
+ *   · 打开交换后左右正确，但**上下也反了** → 说明只换来源键不够
+ *
+ * 后半句这个"上下反了"其实是一条很有用的线索：它证明符号也必须跟着换。
+ * 数值上很清楚（Kalidokit 静息 K.RightUpperArm.z = −1.25，L = +1.25；
+ * 我们静息 rightUpperArm = +72° ≈ +1.257，left = −1.257）：
+ *
+ *     不交换（z × −1）      : right ← K.Right → +1.25  ✅
+ *     只换键、符号不动      : right ← K.Left  → −1.25  ❌ 差 143°，手臂被压下去
+ *     换键 + 镜像奇性轴取反 : right ← K.Left  → +1.25  ✅
+ *
+ * 所以交换要做两件事：来源键对调 + 镜像奇性轴（Y、Z）取反。见 resolveRules 与
+ * MIRROR_ODD_AXES。测试用"Kalidokit 静息必须映射到我们的静息"这条不变式钉住了它，
+ * 两种配置下都验。
+ *
+ * 实测环境：2026-09-22，AMD Radeon 780M 本机，Insta360 / 内置摄像头，
+ * Seed-san + compat.vrm 双角色，selfieMode: false（模型输入不镜像）。
+ */
 /**
  * ★ 需标定的常量 ②：每根骨骼的轴映射。
  *
