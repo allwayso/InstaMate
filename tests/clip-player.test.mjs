@@ -21,10 +21,33 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BONES = JSON.parse(readFileSync(join(ROOT, 'web/lib/human-bones-vrm1.json'), 'utf8'));
 const CLIP_DIR = join(ROOT, 'web/public/clips');
 
-const loadClips = () =>
-  readdirSync(CLIP_DIR)
+/**
+ * 读动作库里的 clip，并带上来源。
+ *
+ * ★ 为什么需要来源：目录里现在不止程序化动作 —— G2 录的真人动作也在里面。
+ *   有些断言（比如"首末帧回到基础站姿"）只对**程序化生成**的动作成立；
+ *   真人录的动作自然从任意姿态开始、在任意姿态结束。
+ *   早期实现把那条断言套在所有文件上，于是录完第一个动作测试就红 ——
+ *   那是测试的假设坏了，不是动作坏了。
+ */
+function loadClips() {
+  const sources = new Map();
+  try {
+    const idx = JSON.parse(readFileSync(join(CLIP_DIR, 'index.json'), 'utf8'));
+    for (const c of idx.clips ?? []) sources.set(c.id, c.source ?? 'generated');
+  } catch {
+    /* 没有目录就都当 generated */
+  }
+  return readdirSync(CLIP_DIR)
     .filter((f) => f.endsWith('.json') && f !== 'index.json')
-    .map((f) => JSON.parse(readFileSync(join(CLIP_DIR, f), 'utf8')));
+    .map((f) => {
+      const clip = JSON.parse(readFileSync(join(CLIP_DIR, f), 'utf8'));
+      return { ...clip, source: sources.get(clip.name) ?? 'generated' };
+    });
+}
+
+/** 只要程序化生成的那批 */
+const generatedClips = () => loadClips().filter((c) => c.source === 'generated');
 
 const q = (a, deg) => rotQ(a, deg);
 const almost = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
@@ -34,7 +57,7 @@ const quatAlmost = (a, b, eps = 1e-6) => a.every((v, i) => Math.abs(v - b[i]) <=
 // 规格与产出文件
 // ---------------------------------------------------------------------------
 
-test('所有程序化产出的动作文件都通过校验', () => {
+test('动作库里的所有动作都通过校验（含真人录制的）', () => {
   const clips = loadClips();
   assert.ok(clips.length >= 6, `期望至少 6 个动作，实际 ${clips.length}`);
   for (const c of clips) {
@@ -43,8 +66,8 @@ test('所有程序化产出的动作文件都通过校验', () => {
   }
 });
 
-test('所有动作的首帧与末帧都回到基础站姿', () => {
-  for (const c of loadClips()) {
+test('程序化动作的首帧与末帧都回到基础站姿（真人录制的不适用这条）', () => {
+  for (const c of generatedClips()) {
     for (const bone of c.mask) {
       const track = c.bones[bone];
       const expected = baseQuatOf(bone);
