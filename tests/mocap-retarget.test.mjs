@@ -169,32 +169,55 @@ test('★★ 回归：桶名必须与 from 前缀同源（这就是"手指完全
   }
 });
 
-test('★★ 弯曲方向：Kalidokit 右手负/左手正 → 都必须映射成我们的【负 Z】弯曲', () => {
-  // 我们的弯曲是 **−Z**（双手同号）—— 由实机反馈确定：
-  // 之前用 +Z 时手指"向外翻"（反关节）。
-  // Kalidokit 是右负左正（rigFingers 的 clamp 边界），
-  // 所以两侧的基准符号必须**异号**才能都把弯曲变到负方向。
+/**
+ * ★ 两只手的弯曲在**坐标上是相反的**（右 +Z、左 −Z）。
+ *
+ * 这是实机反馈定下来的，而且是决定性的一条：
+ *     "左手握拳 ✅、右手握拳 ❌，**配对是对的**（模型右手跟真人右手）"
+ * 配对对、只有一侧符号不对 ⇒ 说明两侧的坐标约定本来就是镜像关系
+ * （与上臂的 Z 同理），只是我一开始当成"两手同号"了。
+ *
+ * 目标值两侧相反，来源值（Kalidokit）两侧也相反（右负左正），
+ * 于是**生效符号必须两侧同值**（都是 +1）；
+ * 又因为生效 = −基准（swap 时镜像），所以基准两侧都是 −1。
+ */
+const CURL_QUAT_Z_SIGN = { rightIndexProximal: +1, rightThumbProximal: +1, leftIndexProximal: -1 };
+
+test('★★ 弯曲方向：右手必须转 +Z、左手必须转 −Z（两侧相反）', () => {
   const hands = buildHandsInput(kdHand('Left', 1), kdHand('Right', -1));
   const out = retarget({ pose: null, hands }, true);
-  for (const b of ['rightIndexProximal', 'leftIndexProximal']) {
-    const q = out.pose[b];
-    assert.ok(
-      q[2] < 0,
-      `${b} 的弯曲方向反了（四元数 z=${q[2].toFixed(4)}，应为负=向内弯）`,
+  for (const [bone, want] of Object.entries(CURL_QUAT_Z_SIGN)) {
+    const q = out.pose[bone];
+    assert.ok(q, `${bone} 没有输出`);
+    assert.equal(
+      Math.sign(q[2]),
+      want,
+      `${bone} 的弯曲方向反了（四元数 z=${q[2].toFixed(4)}，应为${want > 0 ? '正' : '负'}）`,
     );
   }
 });
 
-test('★ 弯曲方向在两种 swapLeftRight 配置下都必须是"负"', () => {
-  // 交换左右会做镜像（翻 z 符号）并换来源键，两者必须互相抵消 ——
+test('★ 弯曲方向在两种 swapLeftRight 配置下都必须一致（否则换左右会开始反关节）', () => {
+  // 交换会同时"换来源键"和"镜像符号"，两者必须互相抵消 ——
   // 否则会出现"换了左右之后手指开始反关节"这种只在一种配置下出现的怪象。
   for (const swap of [false, true]) {
     const hands = buildHandsInput(kdHand('Left', 1), kdHand('Right', -1));
     const out = retarget({ pose: null, hands }, swap);
-    for (const b of ['rightIndexProximal', 'leftIndexProximal', 'rightThumbProximal']) {
-      assert.ok(out.pose[b][2] < 0, `swap=${swap} 时 ${b} 的弯曲方向反了`);
+    for (const [bone, want] of Object.entries(CURL_QUAT_Z_SIGN)) {
+      assert.equal(Math.sign(out.pose[bone][2]), want, `swap=${swap} 时 ${bone} 的弯曲方向反了`);
     }
   }
+});
+
+test('★ 腕部尺桡偏（目标 Y）取自 Kalidokit 的 Wrist.z，且右侧生效符号为 −1', () => {
+  // 实机反馈："右手的尺桡偏反了、左手对" → 右侧生效符号由 +1 改为 −1。
+  // 注意这是**交叉映射**：目标 Y ← Kalidokit 的 **z**，目标 Z ← Kalidokit 的 **y**。
+  // 名字很像，很容易被"顺手改成顺序对应"而改坏。
+  const r = resolveRules(true);
+  assert.equal(r.rightHand.axes[1].axis, 'z', '目标 Y 应取自 Kalidokit 的 Wrist.z');
+  assert.equal(r.rightHand.axes[1].sign, -1, '右手尺桡偏的生效符号应为 −1');
+  assert.equal(r.leftHand.axes[1].axis, 'z');
+  assert.equal(r.leftHand.axes[1].sign, -1, '左手（实测正确）的生效符号为 −1');
 });
 
 test('★ 腕部自转（旋前/旋后）用 X 轴，且两侧同号', () => {

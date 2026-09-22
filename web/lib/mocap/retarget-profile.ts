@@ -286,9 +286,14 @@ const SPINE_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
  *       trackedFinger.z = clamp(z * -PI * invert, side===RIGHT ? -PI : 0, side===RIGHT ? 0 : PI)
  *   → **右手弯曲恒为负、左手恒为正**（两侧异号）。
  *
- * 【实测确认的部分】我们的弯曲方向：
- *   实机反馈"手指向外翻"（反关节）→ 我们当前产出的符号是反的
- *   → **我们的弯曲是 −Z**（双手同号）。
+ * 【实测确认的部分】我们的弯曲方向（★ 两侧相反，与手臂同理）：
+ *   实机反馈（决定性的一条）："左手握拳 ✅、右手握拳 ❌，配对是对的"。
+ *   ⇒ 配对正确、只有右手的符号不对 ⇒ **两只手的弯曲方向在坐标上是相反的**：
+ *       右手弯曲 = +Z      （右侧骨骼的局部系是左侧的镜像）
+ *       左手弯曲 = −Z
+ *   在有效符号上体现为：右手 = +1、左手 = +1（两侧同值），
+ *   但由于 Kalidokit 的**来源值两侧相反**（右负左正），
+ *   目标值自然就变成两侧相反 ✅ 与我们的 rig 一致。
  *
  *   这条纠正了一个更早的错误：几何探针可靠地测出了**哪根轴**是弯曲
  *   （绕 X 指尖不动 → X=长轴；绕 Z 指尖沿手掌法线移动 → Z=弯曲），
@@ -298,20 +303,21 @@ const SPINE_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
  *   向前弯和向后翻都会让指尖靠近手掌中心（实测 +Z/−Z 的 Δ 都是 −3cm）。
  *   ⇒ "轴的取向"能用几何测，"符号方向"必须看真人 —— 记在这里免得再犯。
  *
- * 于是基准符号（两侧异号，与 Kalidokit 的异号相对）：
- *       right: z = +1   （Kalidokit 右手负 → 我们的负 ✅）
- *       left : z = −1   （Kalidokit 左手正 → 我们的负 ✅）
- *   经 resolveRules 的镜像后（swap=true 时）：
- *       right ← Left*  符号 −1 → K.Left 正 × −1 = 负 ✅
- *       left  ← Right* 符号 +1 → K.Right 负 × +1 = 负 ✅
- *   两种配置下都是"负 = 弯曲"，自洽。
+ * 于是基准符号（两侧同值 −1；生效符号 = −基准，即两侧 +1）：
+ *       right: 基准 z = −1  → 生效 +1 → K.Left(正)  × +1 = 正 = 右手的弯曲 ✅
+ *       left : 基准 z = −1  → 生效 +1 → K.Right(负) × +1 = 负 = 左手的弯曲 ✅
+ *   两种 swapLeftRight 配置下都成立（见测试）。
  *
- * 【未实测的部分】腕部 Y（尺桡偏）的符号（Kalidokit 的 Wrist.z）；
+ * 【实测确认】腕部 Y（尺桡偏）：实机反馈"**右手的尺桡偏反了、左手对**" →
+ *   右手生效符号由 +1 改为 −1（基准 z 槽由 −1 改为 +1）。
+ *   注意 Y 槽取自 Kalidokit 的 **Wrist.z**（交叉映射），别被名字骗了。
+ *
+ * 【未实测的部分】腕部 Z（屈伸）的符号（取自 Kalidokit 的 Wrist.y）；
  *   腕部 X（自转）已由实机反馈定为 −1；腕部 Z（屈伸）取自 Kalidokit 的 Wrist.y，
  *   其钳位左右不对称，符号仍需实测。
  */
 const HAND_AXES: Record<'right' | 'left', AxisTriple> = {
-  right: [ax('x', 1), ax('y', 1), ax('z', 1)],
+  right: [ax('x', 1), ax('y', 1), ax('z', -1)],
   left: [ax('x', 1), ax('y', 1), ax('z', -1)],
 };
 
@@ -334,7 +340,7 @@ const HAND_AXES: Record<'right' | 'left', AxisTriple> = {
  * 实测反馈：初值写 +1 时"手腕相对于前臂的旋转是反的"（用户实机）。改为 −1。
  */
 const WRIST_MAP: Record<'right' | 'left', AxisTriple> = {
-  right: [ax('x', -1), ax('z', -1), ax('y', -1)],
+  right: [ax('x', -1), ax('z', 1), ax('y', -1)],
   left: [ax('x', -1), ax('z', 1), ax('y', 1)],
 };
 
@@ -345,7 +351,7 @@ const WRIST_MAP: Record<'right' | 'left', AxisTriple> = {
  * x 取 0（不映射）：Kalidokit 的拇指 x 是"对掌"修正项，不是绕长轴自转，硬映射更糟。
  */
 const THUMB_MAP: Record<'right' | 'left', AxisTriple> = {
-  right: [ax('x', 0), ax('y', -1), ax('z', 1)],
+  right: [ax('x', 0), ax('y', -1), ax('z', -1)],
   left: [ax('x', 0), ax('y', 1), ax('z', -1)],
 };
 
