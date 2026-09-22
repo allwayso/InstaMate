@@ -16,6 +16,8 @@ import {
   RETARGET_TARGET_BONES,
   CALIBRATED_BONES,
   findUnpairedSidedBones,
+  buildHandsInput,
+  FINGER_TARGET_BONES,
   RETARGET_IS_MEASURED,
 } from '../web/lib/mocap/retarget-profile.ts';
 import {
@@ -117,6 +119,68 @@ test('每根目标骨骼都有规则，且来源键是已知的 Kalidokit 键', 
   }
 });
 
+/**
+ * 造一份 Kalidokit HandSolver 形状的输出。
+ * curl 的符号遵循其源码：**右手恒负、左手恒正**（rigFingers 的 clamp 边界）。
+ */
+function kdHand(side, curl = 0) {
+  const h = {};
+  h[`${side}Wrist`] = { x: 0, y: 0, z: 0 };
+  for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Little']) {
+    for (const seg of ['Proximal', 'Intermediate', 'Distal']) {
+      h[`${side}${f}${seg}`] = { x: 0, y: 0, z: curl };
+    }
+  }
+  return h;
+}
+
+test('★★ 手指必须真的动起来（喂手部数据 → 30 根手指全部有输出且非单位四元数）', () => {
+  // 握拳：右手负、左手正（Kalidokit 的约定）
+  const hands = buildHandsInput(kdHand('Left', 1.2), kdHand('Right', -1.2));
+  const out = retarget({ pose: null, hands }, true);
+
+  // 这个测试只喂了手部，所以身体骨骼当然缺 —— 只检查手指
+  const missingFingers = out.missing.filter((b) => FINGER_TARGET_BONES.includes(b));
+  assert.deepEqual(missingFingers, [], `以下手指缺来源：${missingFingers.join(', ')}`);
+  const still = [];
+  for (const b of FINGER_TARGET_BONES) {
+    const q = out.pose[b];
+    if (!q) {
+      still.push(`${b}(无输出)`);
+      continue;
+    }
+    if (angleBetween(q, [0, 0, 0, 1]) < 5) still.push(`${b}(没动)`);
+  }
+  assert.deepEqual(still, [], `以下手指没有跟随：${still.join(', ')}`);
+});
+
+test('★★ 回归：桶名必须与 from 前缀同源（这就是"手指完全不动"的成因）', () => {
+  // 曾经的写法是 hands = { left, right } 而键前缀是 Right*/Left*，
+  // 于是查找永远命中不到 —— 两边各自自洽、合起来不通，而且不报错。
+  const hands = buildHandsInput(kdHand('Left', 1), kdHand('Right', -1));
+  assert.deepEqual(Object.keys(hands).sort(), ['Left', 'Right'], '桶名必须是 Kalidokit 的侧名');
+  for (const [bone, rule] of Object.entries(RETARGET_RULES)) {
+    if (rule.scope !== 'hand') continue;
+    const side = rule.from.startsWith('Right') ? 'Right' : 'Left';
+    assert.ok(
+      hands[side] && hands[side][rule.from] !== undefined,
+      `${bone}: 桶 ${side} 里没有键 ${rule.from} —— 这正是"手指不动"的直接原因`,
+    );
+  }
+});
+
+test('★ 手指弯曲方向：负值(右手)与正值(左手)都映射成我们的正弯曲', () => {
+  // 我们的手指弯曲是 +Z（双手同号，几何探针实测）。
+  // Kalidokit 右手负、左手正 → 两侧符号必须不同，否则一侧会反关节。
+  const hands = buildHandsInput(kdHand('Left', 1), kdHand('Right', -1));
+  const out = retarget({ pose: null, hands }, true);
+  for (const b of ['rightIndexProximal', 'leftIndexProximal']) {
+    const q = out.pose[b];
+    // 绕 +Z 转动的四元数 z 分量为正
+    assert.ok(q[2] > 0, `${b} 的弯曲方向反了（z=${q[2].toFixed(4)}，应为正）`);
+  }
+});
+
 test('★ 手部来源的 scope 必须是 hand（否则会去姿态输出里找，永远取不到）', () => {
   for (const b of ['rightHand', 'leftHand']) {
     assert.equal(RETARGET_RULES[b].scope, 'hand', `${b} 的 scope 应为 hand`);
@@ -206,7 +270,10 @@ function handsRest() {
   }
   return h;
 }
-const HANDS_REST = { left: handsRest(), right: handsRest() };
+// ★ 必须经 buildHandsInput 装桶 —— 直接写 {left,right} 会因为桶名与键前缀
+//   不同源而永远查不到（这正是"手指完全不动"的成因）。让测试也走同一条路，
+//   才不会出现"代码修了但测试还在用旧命名"。
+const HANDS_REST = buildHandsInput(handsRest(), handsRest());
 
 test('★ 静息不变式：Kalidokit 的静息值映射到我们的静息值（swap = false）', () => {
   const out = retarget({ pose: KALIDOKIT_REST, hands: HANDS_REST }, false);

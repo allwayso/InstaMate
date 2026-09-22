@@ -456,6 +456,25 @@ export function handSideFor(landmarkSide: 'left' | 'right'): 'Right' | 'Left' {
   return landmarkSide === 'left' ? 'Left' : 'Right';
 }
 
+/**
+ * 把两只手的解算结果装进 `RetargetInput.hands`。
+ *
+ * ★ 桶名用 **Kalidokit 的侧名**（handSideFor 的返回值），保证与 `from` 前缀同源。
+ *   这个函数的存在就是为了让"页面接线"和"重定向查找"不可能用两套命名 ——
+ *   之前正是这两处不一致，导致手指完全不动。
+ */
+export function buildHandsInput(
+  fromRightLandmarks: KalidokitHandLike | null,
+  fromLeftLandmarks: KalidokitHandLike | null,
+): { Right?: KalidokitHandLike | null; Left?: KalidokitHandLike | null } {
+  const out: { Right?: KalidokitHandLike | null; Left?: KalidokitHandLike | null } = {};
+  const sideOfRight = handSideFor('right');
+  const sideOfLeft = handSideFor('left');
+  out[sideOfRight] = fromRightLandmarks;
+  out[sideOfLeft] = fromLeftLandmarks;
+  return out;
+}
+
 /** 把规则表按 swapLeftRight 解析成「目标骨骼 → 实际使用的规则」 */
 export function resolveRules(swap: boolean = swapLeftRight): Record<RetargetBone, BoneRule> {
   const out = {} as Record<RetargetBone, BoneRule>;
@@ -508,16 +527,24 @@ export interface KalidokitFaceLike {
 /**
  * 手部来源。
  *
- * 命名按"来自哪一只手的关键点"：`hands.left` = 由 `leftHandLandmarks` 解出来的。
- * 用哪一侧的 `side` 参数去解，取决于 `swapLeftRight`（见 handSideFor）——
- * 与姿态那边保持同一套左右约定，否则会出现"手臂对了手指反了"。
+ * ★ 分桶按 **Kalidokit 的键前缀**命名，不是按"来自哪只手的关键点"。
+ *   这一点很关键，而且踩过：页面用 `handSideFor('left')`（swapLeftRight=true 时是 'Right'）
+ *   去解 `leftHandLandmarks`，于是输出的键全是 `Right*`。
+ *   若分桶叫 `left`，那 `from: 'LeftIndexProximal'` 就会去 `hands.left` 里找一个
+ *   名叫 `LeftIndexProximal` 的键 —— 两边各自自洽、**合起来永远取不到**，
+ *   症状就是"手指完全不动"而且不报错。
+ *
+ *   改成按键前缀分桶后：
+ *     `hands.Right` = 用 side='Right' 解出来的那份（内部键都是 Right*）
+ *     `hands.Left`  = 用 side='Left'  解出来的那份（内部键都是 Left*）
+ *   于是 `from` 的“查哪个桶”与“查哪个键”来自同一个前缀，不可能不一致。
  */
 export interface RetargetInput {
   pose: KalidokitPoseLike | null;
   face?: KalidokitFaceLike | null;
   hands?: {
-    left?: KalidokitHandLike | null;
-    right?: KalidokitHandLike | null;
+    Right?: KalidokitHandLike | null;
+    Left?: KalidokitHandLike | null;
   } | null;
 }
 
@@ -537,8 +564,9 @@ function lookupSource(rule: BoneRule, input: RetargetInput): XYZ | null {
     return isXYZ(v) ? v : null;
   }
   if (scope === 'hand') {
-    // `from` 的前缀就是左右：交换左右时 from 被换掉，这里自动跟着走，不需要额外字段
-    const side = from.startsWith('Right') ? 'right' : from.startsWith('Left') ? 'left' : null;
+    // `from` 的前缀同时决定「查哪个桶」与「查哪个键」—— 两者来自同一个前缀，
+    // 所以不可能出现"桶对了键不对"这种静默失效。
+    const side = from.startsWith('Right') ? 'Right' : from.startsWith('Left') ? 'Left' : null;
     if (!side) return null;
     const v = input.hands?.[side]?.[from];
     return isXYZ(v) ? v : null;

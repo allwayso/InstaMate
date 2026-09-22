@@ -30,6 +30,7 @@ import type { Pose } from '@/lib/pose';
 import {
   RETARGET_TARGET_BONES,
   RETARGET_IS_MEASURED,
+  buildHandsInput,
   handSideFor,
   retarget,
   swapLeftRight as DEFAULT_SWAP,
@@ -151,6 +152,22 @@ export default function MotionLibraryPage() {
   const rawFramesRef = useRef<MocapRawFrame[]>([]);
 
   /**
+   * 上一帧的管线诊断。
+   *
+   * 这类"某一路数据没到位"的故障，从画面上只能看出"某某不动"，
+   * 但原因可能在四五个环节之一。把它记下来，一次就能定位：
+   * 手部关键点到了吗 → 解算出了吗 → 重定向产出几根 → 写进骨骼成功吗。
+   */
+  const pipelineRef = useRef({
+    handLandmarks: { left: 0, right: 0 },
+    handSolved: { Left: false, Right: false },
+    retargetProduced: 0,
+    retargetMissingFingers: [] as string[],
+    applied: 0,
+    applyError: null as string | null,
+  });
+
+  /**
    * 标定探针。
    *
    * 目的：把"哪个分量在动、往哪个方向动"从**观察**变成**数字**。
@@ -262,12 +279,14 @@ export default function MotionLibraryPage() {
       const kf = solver?.solveFace(frame.faceLandmarks, { imageSize }) ?? null;
 
       // 手部：走**独立**的 HandSolver 通路（16 关节/手，含腕部自转）。
-      // side 参数必须跟 swapLeftRight 同一套约定，否则会出现"手臂对了手指反了"。
+      // ★ 用 buildHandsInput 装桶，桶名与 `from` 前缀同源 ——
+      //   之前这里自己拼 {left, right}，而键前缀是 Right*/Left*，于是永远查不到，
+      //   表现为"手指完全不动"且不报错。
       const hands = solver
-        ? {
-            left: solver.solveHand(frame.leftHandLandmarks, handSideFor('left')),
-            right: solver.solveHand(frame.rightHandLandmarks, handSideFor('right')),
-          }
+        ? buildHandsInput(
+            solver.solveHand(frame.rightHandLandmarks, handSideFor('right')),
+            solver.solveHand(frame.leftHandLandmarks, handSideFor('left')),
+          )
         : null;
 
       // 1.5) 标定探针采样（记录**重定向前**的原始输出）
@@ -288,12 +307,23 @@ export default function MotionLibraryPage() {
         };
         push(kp as Record<string, unknown> | null);
         push(kf as Record<string, unknown> | null, 'Face.');
-        push(hands?.left as Record<string, unknown> | null, 'L.');
-        push(hands?.right as Record<string, unknown> | null, 'R.');
+        push(hands?.Left as Record<string, unknown> | null, 'L.');
+        push(hands?.Right as Record<string, unknown> | null, 'R.');
       }
 
       // 2) 重定向 → 规范化姿态（40 根：上半身 + 头 + 腕 + 30 根手指）
       const rt = retarget({ pose: kp, face: kf, hands }, swapRef.current);
+      pipelineRef.current = {
+        handLandmarks: {
+          left: frame.leftHandLandmarks?.length ?? 0,
+          right: frame.rightHandLandmarks?.length ?? 0,
+        },
+        handSolved: { Left: !!hands?.Left, Right: !!hands?.Right },
+        retargetProduced: Object.keys(rt.pose).length,
+        retargetMissingFingers: rt.missing.filter((b) => b.includes('Index') || b.includes('Middle') || b.includes('Ring') || b.includes('Little') || b.includes('Thumb')),
+        applied: 0,
+        applyError: null,
+      };
 
       // 3) 校准采样（用**未修正**的 canonical —— 修正量正是从它算出来的）
       if (stateRef.current === 'calibrating') {
@@ -313,8 +343,13 @@ export default function MotionLibraryPage() {
       const smoother = ensureSmoother();
       const smoothed = smoother.update(calibrated, confidence, now, dt);
 
-      // 6) 实时驱动预览
+      // 6) 实时驱动预览（顺便记下"写进骨骼"这一步的结果）
       preview?.setLivePose(smoothed.pose);
+      const st = preview?.getStatus();
+      if (st) {
+        pipelineRef.current.applied = Object.keys(smoothed.pose).length;
+        pipelineRef.current.applyError = st.applyError;
+      }
 
       // 7) 录制缓冲
       const rec = recordingRef.current;
@@ -636,6 +671,15 @@ export default function MotionLibraryPage() {
       getSnapshot: () => previewRef.current?.getSnapshot() ?? null,
       getBasePose: () => base,
       isMeasured: () => RETARGET_IS_MEASURED,
+      /**
+       * 管线诊断。手指不动时看这个：
+       *   handLandmarks 都是 0        → 手没被检到（手垂着/出画/光线暗）
+       *   handSolved 是 false         → 解算失败（21 点不全）
+       *   retargetProduced 远小于 40  → 来源键没对上
+       *   missingFingers 非空          → 具体哪些手指缺来源
+       *   applyError 非空             → 骨骼写不进去（缺骨骼）
+       */
+      getPipeline: () => pipelineRef.current,
       /** 摄像头会话诊断：帧数为 0 说明帧循环根本没跑起来（rVFC 不触发等） */
       getCameraInfo: () => {
         const s = cameraRef.current?.session;
