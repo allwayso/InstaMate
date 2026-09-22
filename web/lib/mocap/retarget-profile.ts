@@ -281,21 +281,38 @@ const SPINE_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
  *   双手结论一致，且**弯曲都是 +Z**（不按左右翻转）。
  *   `hand` 骨骼同样测了：X=自转(twist)、Y=尺桡偏、Z=屈伸；也是双手同号。
  *
- * 【由源码推出的部分】符号：
+ * 【由源码推出的部分】Kalidokit 的符号：
  *   kalidokit 的 rigFingers 里
  *       trackedFinger.z = clamp(z * -PI * invert, side===RIGHT ? -PI : 0, side===RIGHT ? 0 : PI)
- *   即 **右手恒负、左手恒正**。而我们双手弯曲都是 +Z，所以基准符号必须按侧区分：
- *       right: z = −1（右手负 → 我们的正）
- *       left : z = +1（左手正 → 我们的正）
- *   这也解释了为什么手指**不能**照搬手臂的"两侧同号"。
+ *   → **右手弯曲恒为负、左手恒为正**（两侧异号）。
  *
- * 【未实测的部分】腕部三个轴的符号（Kalidokit 的 Wrist.x=twist / z=左右，都乘了 invert；
- *   y 的钳位左右不对称）。现在按与手指相同的按侧模式给初值，
- *   用标定探针（选「手腕内旋」这类动作）可以一轮定下来。
+ * 【实测确认的部分】我们的弯曲方向：
+ *   实机反馈"手指向外翻"（反关节）→ 我们当前产出的符号是反的
+ *   → **我们的弯曲是 −Z**（双手同号）。
+ *
+ *   这条纠正了一个更早的错误：几何探针可靠地测出了**哪根轴**是弯曲
+ *   （绕 X 指尖不动 → X=长轴；绕 Z 指尖沿手掌法线移动 → Z=弯曲），
+ *   但"哪个**符号**是弯曲"依赖一个**我当时没验证的假设** ——
+ *   假定 `cross(indexK−wrist, littleK−wrist)` 指向掌心，它也可能指向手背。
+ *   后来想用"指尖是否靠近手掌中心"来判定，也**不成立**：手很薄，
+ *   向前弯和向后翻都会让指尖靠近手掌中心（实测 +Z/−Z 的 Δ 都是 −3cm）。
+ *   ⇒ "轴的取向"能用几何测，"符号方向"必须看真人 —— 记在这里免得再犯。
+ *
+ * 于是基准符号（两侧异号，与 Kalidokit 的异号相对）：
+ *       right: z = +1   （Kalidokit 右手负 → 我们的负 ✅）
+ *       left : z = −1   （Kalidokit 左手正 → 我们的负 ✅）
+ *   经 resolveRules 的镜像后（swap=true 时）：
+ *       right ← Left*  符号 −1 → K.Left 正 × −1 = 负 ✅
+ *       left  ← Right* 符号 +1 → K.Right 负 × +1 = 负 ✅
+ *   两种配置下都是"负 = 弯曲"，自洽。
+ *
+ * 【未实测的部分】腕部 Y（尺桡偏）的符号（Kalidokit 的 Wrist.z）；
+ *   腕部 X（自转）已由实机反馈定为 −1；腕部 Z（屈伸）取自 Kalidokit 的 Wrist.y，
+ *   其钳位左右不对称，符号仍需实测。
  */
 const HAND_AXES: Record<'right' | 'left', AxisTriple> = {
-  right: [ax('x', 1), ax('y', 1), ax('z', -1)],
-  left: [ax('x', 1), ax('y', 1), ax('z', 1)],
+  right: [ax('x', 1), ax('y', 1), ax('z', 1)],
+  left: [ax('x', 1), ax('y', 1), ax('z', -1)],
 };
 
 /**
@@ -321,10 +338,15 @@ const WRIST_MAP: Record<'right' | 'left', AxisTriple> = {
   left: [ax('x', -1), ax('z', 1), ax('y', 1)],
 };
 
-/** 拇指：Kalidokit 的 z 是弯曲主力，x/y 是做对掌的修正项 */
+/**
+ * 拇指：Kalidokit 的 z 是弯曲主力，x/y 是做对掌的修正项。
+ * 弯曲符号与四指同规则（我们 −Z）—— Kalidokit 拇指的 z 同样是右负左正
+ * （rigFingers 里 `trackedFinger.z * -PI * dampener.z * invert`）。
+ * x 取 0（不映射）：Kalidokit 的拇指 x 是"对掌"修正项，不是绕长轴自转，硬映射更糟。
+ */
 const THUMB_MAP: Record<'right' | 'left', AxisTriple> = {
-  right: [ax('x', 0), ax('y', -1), ax('z', -1)],
-  left: [ax('x', 0), ax('y', 1), ax('z', 1)],
+  right: [ax('x', 0), ax('y', -1), ax('z', 1)],
+  left: [ax('x', 0), ax('y', 1), ax('z', -1)],
 };
 
 /**

@@ -169,15 +169,31 @@ test('★★ 回归：桶名必须与 from 前缀同源（这就是"手指完全
   }
 });
 
-test('★ 手指弯曲方向：负值(右手)与正值(左手)都映射成我们的正弯曲', () => {
-  // 我们的手指弯曲是 +Z（双手同号，几何探针实测）。
-  // Kalidokit 右手负、左手正 → 两侧符号必须不同，否则一侧会反关节。
+test('★★ 弯曲方向：Kalidokit 右手负/左手正 → 都必须映射成我们的【负 Z】弯曲', () => {
+  // 我们的弯曲是 **−Z**（双手同号）—— 由实机反馈确定：
+  // 之前用 +Z 时手指"向外翻"（反关节）。
+  // Kalidokit 是右负左正（rigFingers 的 clamp 边界），
+  // 所以两侧的基准符号必须**异号**才能都把弯曲变到负方向。
   const hands = buildHandsInput(kdHand('Left', 1), kdHand('Right', -1));
   const out = retarget({ pose: null, hands }, true);
   for (const b of ['rightIndexProximal', 'leftIndexProximal']) {
     const q = out.pose[b];
-    // 绕 +Z 转动的四元数 z 分量为正
-    assert.ok(q[2] > 0, `${b} 的弯曲方向反了（z=${q[2].toFixed(4)}，应为正）`);
+    assert.ok(
+      q[2] < 0,
+      `${b} 的弯曲方向反了（四元数 z=${q[2].toFixed(4)}，应为负=向内弯）`,
+    );
+  }
+});
+
+test('★ 弯曲方向在两种 swapLeftRight 配置下都必须是"负"', () => {
+  // 交换左右会做镜像（翻 z 符号）并换来源键，两者必须互相抵消 ——
+  // 否则会出现"换了左右之后手指开始反关节"这种只在一种配置下出现的怪象。
+  for (const swap of [false, true]) {
+    const hands = buildHandsInput(kdHand('Left', 1), kdHand('Right', -1));
+    const out = retarget({ pose: null, hands }, swap);
+    for (const b of ['rightIndexProximal', 'leftIndexProximal', 'rightThumbProximal']) {
+      assert.ok(out.pose[b][2] < 0, `swap=${swap} 时 ${b} 的弯曲方向反了`);
+    }
   }
 });
 
