@@ -307,6 +307,10 @@ G1 失败先修资产/渲染；G1 通过而 G2 失败再查动捕重定向。G2 
 
 - **动作格式契约与接入方式**：`docs/动作库接入说明.md`（clip v1 格式、实测轴向约定、三种接入方式、动捕接入流程）
 - **G1 验收证据**：`docs/G1-验收记录.md`
+- **G2 实现状态与待办**：`docs/G2-验收记录.md`
+  - G2 实现已完成、自动化 124 项通过；**真人对着摄像头的 10 条验收与轴向标定待执行**
+  - ⚠️ `retarget-profile.ts` 的 `RETARGET_IS_MEASURED = false`：轴向映射**尚未实测**，
+    页面会显示警告条。标定（抬右手看哪条轴变）完成后改 true
 - G1 起，**身体骨骼只由 `web/lib/character-runtime.ts` 写入**，且只写 normalized；
   播放器 `web/lib/clip-player.ts` 不持有 VRM。动作格式与校验规则的唯一实现在 `web/lib/clip-spec.ts`（浏览器与 CLI 共用）。
 

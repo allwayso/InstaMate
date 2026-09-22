@@ -2,8 +2,10 @@
 
 从一组照片、一段聊天记录还原出一个和你共享记忆的 3D 桌面伙伴
 
-> 当前进度：P0/A 泳道已打通 **静态 VRM 渲染（门槛 G0）** 与 **程序化动作播放（门槛 G1）**。
-> 实施规范见 `docs/Collaborate.md`（唯一真实参考），本轮计划见 `PLAN.md`。
+> 当前进度：P0/A 泳道已打通 **静态 VRM 渲染（G0）**、**程序化动作播放（G1）**，
+> 以及 **摄像头动作录入与动作库（G2，实现完成；真人摄像头验收待执行）**。
+> 实施规范见 `docs/Collaborate.md`（唯一真实参考）。
+> 验收证据：`docs/G1-验收记录.md`、`docs/G2-验收记录.md`。
 
 ---
 
@@ -16,22 +18,29 @@
 git clone https://github.com/allwayso/InstaMate.git
 cd InstaMate
 
-# 1) 拉示例 VRM 资产（约 11 MB，不进 git，必须这一步）
+# 1) 拉示例 VRM 资产（两个角色，约 22 MB，不进 git，必须这一步）
 node tools/fetch-assets.mjs
 
-# 2) 装依赖（用 ci 不用 install：保证版本与 lockfile 完全一致）
+# 2) 同步 MediaPipe 本地资源（10 个文件 / 37.78 MB，不进 git，用动作录入必须这一步）
+node tools/sync-mediapipe.mjs
+
+# 3) 装依赖（用 ci 不用 install：保证版本与 lockfile 完全一致）
 cd web && npm ci
 
-# 3) 起开发服务器
+# 4) 起开发服务器
 npm run dev
 ```
 
-打开 **http://localhost:3000**。
+- **http://localhost:3000** —— 角色调试台（G0/G1：静态渲染、环绕检视、动作播放）
+- **http://localhost:3000/motion-library** —— 动作录入与动作库（G2）
 
 **观察操作**：左键拖动旋转 · 右键拖动平移 · Shift + 左键平移 · Shift + 右键旋转 · 滚轮缩放 · 「归位视角」复位。
 
 **G1 动作控件**（右侧面板）：动作选择 · 播放/暂停/继续/停止 · 循环 · 时间轴（拖动即逐帧定位并暂停）·
 骨架辅助线 · 「恢复基础站姿」「参考姿态」· 导入本地 JSON。
+
+**G2 动作录入**（`/motion-library`）：启动摄像头 → 校准 1.5 秒 → 3 秒倒计时 → 录制（最长 10 秒）→
+裁剪 → 校验 → 保存进项目动作库 → 单/双角色回放。详见 `docs/G2-验收记录.md`。
 
 ### 启动成功的判据
 
@@ -59,13 +68,17 @@ npm run dev
 | `npm run gen:clips` | 重新生成全部程序化动作（产出即自检，不合格不写盘） |
 | `npm run validate:all` | 校验 `public/clips/` 下全部动作 |
 | `npm run validate:fixtures` | 跑校验器夹具：6 个坏的全被拒、合法的通过 |
-| `npm run test:clip` | 15 项播放与插值逻辑测试 |
+| `npm test` | 全部 124 项（含 G1 回归与动作库 API 集成；没起服务器时集成部分自动跳过） |
+| `npm run test:clip` | 15 项播放与插值逻辑测试（G1 回归） |
+| `npm run test:mocap` | 68 项动捕纯逻辑测试（重定向/校准/平滑/裁剪，全离线） |
+| `npm run sync:mediapipe` | 同步 MediaPipe 本地资源 |
 
 在仓库根目录：
 
 | 命令 | 作用 |
 |---|---|
-| `node tools/fetch-assets.mjs [--force]` | 拉取示例 VRM（多镜像回退 + sha256 校验） |
+| `node tools/fetch-assets.mjs [--force]` | 拉取两个示例 VRM（固定 commit + sha256 校验） |
+| `node tools/sync-mediapipe.mjs [--check]` | 同步 MediaPipe 本地资源；`--check` 只查不复制，缺文件时退出码 1 |
 | `node tools/inspect-vrm.mjs <file.vrm> [--json\|--manifest]` | 能力探测 |
 | `node tools/validate-clip.mjs <clip.json> [--target <manifest>]` | 校验动作文件，退出码 0/1/2 |
 | `bash tools/dev-browser.sh status\|up\|down` | 无头浏览器进程管家（仅 Windows） |
@@ -80,6 +93,7 @@ npm run dev
 │  ├─ Collaborate.md         ★ 实施主文档：角色划分 / 接口契约 / 时间线 / 验收门槛 G0–G5
 │  ├─ 动作库接入说明.md       ★ clip v1 格式、轴向约定、三种接入方式、动捕接入流程
 │  ├─ G1-验收记录.md          G1 自动化与人工验收证据
+│  ├─ G2-验收记录.md          G2 实现状态、已自动验证项与待执行的摄像头验收
 │  ├─ P0-A-第一步-方案与验收.md  实测数据与踩坑记录
 │  └─ 赛道一_…_组队提案书.md/.pdf  比赛提交材料（不作为实施依据）
 ├─ web/                      Next.js 16 应用（App Router + TypeScript）
@@ -94,10 +108,13 @@ npm run dev
 │  │  ├─ clip-catalog.ts     动作目录、加载与导入
 │  │  ├─ human-bones-vrm1.json  VRM 1.0 规范 55 根骨骼冻结表
 │  │  └─ vrm-character.ts    VRM 加载器 + 运行时能力探测
+│  ├─ lib/mocap/             动捕管线（类型/重定向/校准/平滑/裁剪/摄像头会话）
+│  ├─ components/motion-library/  动作录入页的组件
 │  ├─ public/avatars/        VRM 资产（不进 git，用 tools/fetch-assets.mjs 拉取）
-│  └─ public/clips/          动作库（clip v1 JSON + index.json 目录）
+│  ├─ public/clips/          动作库（clip v1 JSON + index.json 目录）
+│  └─ public/vendor/         MediaPipe 本地资源（不进 git，用 tools/sync-mediapipe.mjs 生成）
 ├─ tools/                    命令行工具（拉资产 / 能力探测 / 动作生成 / 动作校验 / 进程管家）
-├─ tests/                    校验器夹具 + 播放与插值测试
+├─ tests/                    校验器夹具 + 播放/插值/动捕/动作库 API 测试
 ├─ assets/vrm/               VRM 的 manifest（资产本身不进 git）
 └─ PLAN.md                   本轮实施计划
 ```
