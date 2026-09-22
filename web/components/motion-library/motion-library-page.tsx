@@ -554,12 +554,38 @@ export default function MotionLibraryPage() {
       getSnapshot: () => previewRef.current?.getSnapshot() ?? null,
       getBasePose: () => base,
       isMeasured: () => RETARGET_IS_MEASURED,
+      /** 摄像头会话诊断：帧数为 0 说明帧循环根本没跑起来（rVFC 不触发等） */
+      getCameraInfo: () => {
+        const s = cameraRef.current?.session;
+        return s
+          ? {
+              status: s.currentStatus,
+              detail: s.statusDetail,
+              inferenceFps: s.inferenceFps,
+              inferenceMs: s.inferenceMs,
+              framesProcessed: s.framesProcessed,
+              usingRvfc: s.usingVideoFrameCallback,
+              activeTracks: s.activeTrackCount,
+            }
+          : null;
+      },
       applyTrim,
       playEntry: handlePlayEntry,
     };
   }, [calibration, recOutcome, built, trim, entries, base, applyTrim, handlePlayEntry]);
 
-  const canRecord = state === 'ready' || state === 'detecting';
+  /**
+   * 录制按钮的可点条件是**校准成功**，不是"摄像头开着"。
+   * 计划原文："校准成功后允许录制"。做成禁用而不是"可点然后弹提示"，
+   * 是因为禁用 + tooltip 能让人一眼看出缺哪一步，而弹提示需要先点错一次。
+   */
+  const calibrated = calibration?.ok === true;
+  const canRecord = state === 'ready' && calibrated;
+  const recordHint = !calibrated
+    ? '需要先完成校准：点上方「校准（1.5 秒）」，保持自然站姿'
+    : state !== 'ready'
+      ? `当前状态：${STATE_LABEL[state]}`
+      : '';
   const busy = state === 'saving' || state === 'processing';
 
   return (
@@ -605,10 +631,16 @@ export default function MotionLibraryPage() {
             handleRef={cameraRef}
             locked={state === 'recording' || state === 'countdown'}
             onStatus={(s, d) => {
-              if (s === 'running' && stateRef.current === 'camera-off') setStateBoth('detecting');
-              if (s === 'starting' && stateRef.current === 'camera-off') setStateBoth('loading-model');
-              if (s === 'error') setStateBoth('error');
-              if (s === 'stopped') setStateBoth('camera-off');
+              // ★ 注意守卫要同时允许 camera-off 与 loading-model：
+              //   session 的启动过程本身就会先报 'starting'（我们因此进入 loading-model），
+              //   若这里只认 camera-off，就再也晋升不到 detecting ——
+              //   表现为"徽章一直显示加载中"，而实际上摄像头已经跑起来了。
+              //   （这个 bug 是预检脚本抓出来的，真人上场时会立刻撞到。）
+              const notStarted = stateRef.current === 'camera-off' || stateRef.current === 'loading-model';
+              if (s === 'running' && notStarted) setStateBoth('detecting');
+              else if (s === 'starting' && stateRef.current === 'camera-off') setStateBoth('loading-model');
+              else if (s === 'error') setStateBoth('error');
+              else if (s === 'stopped') setStateBoth('camera-off');
               if (d && s === 'error') setNotice({ kind: 'error', text: d });
             }}
           />
@@ -694,7 +726,7 @@ export default function MotionLibraryPage() {
               className="primary"
               onClick={beginCountdown}
               disabled={!canRecord}
-              title={canRecord ? '' : '需要先校准并进入就绪状态'}
+              title={recordHint}
             >
               开始录制
             </button>

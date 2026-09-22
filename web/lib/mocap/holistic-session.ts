@@ -124,6 +124,17 @@ export class HolisticSession {
   private running = false;
   private loopHandle: number | null = null;
   private loopKind: 'rvfc' | 'raf' | null = null;
+  /**
+   * rVFC 看门狗。
+   *
+   * ★ `requestVideoFrameCallback` **存在**不代表它会触发：标签页不可见、
+   *   无头环境、没有实际画面呈现时，回调可能永远不来。
+   *   早期实现把它当作"有就一定好用"，结果是一帧都收不到，
+   *   而且不报错 —— 现场看就是"摄像头开了、覆盖层也在，但关键点永远不动"。
+   *   所以注册之后起一个 1 秒看门狗，没触发就永久切到 rAF。
+   */
+  private rvfcWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private forceRaf = false;
 
   private frameTimes: number[] = [];
   private lastPoseInputs: { pose: MocapRawFrame['poseLandmarks']; world: MocapRawFrame['poseWorldLandmarks'] } = {
@@ -261,6 +272,7 @@ export class HolisticSession {
 
     this.running = true;
     this.busy = false;
+    this.forceRaf = false;
     this.frameTimes = [];
     this.setStatus('running', '识别中');
     this.scheduleFrame(gen);
@@ -280,6 +292,7 @@ export class HolisticSession {
     this.holistic = null;
     this.releaseStream();
     this.frameTimes = [];
+    this.framesProcessedCount = 0;
     this.lastPoseInputs = { pose: null, world: null };
     if (this.status !== 'error') this.setStatus('stopped', '已关闭');
   }
@@ -297,15 +310,32 @@ export class HolisticSession {
   private scheduleFrame(gen: number): void {
     if (!this.running || gen !== this.generation) return;
 
-    if (hasVideoFrameCallback(this.video)) {
+    if (!this.forceRaf && hasVideoFrameCallback(this.video)) {
       this.loopKind = 'rvfc';
+      let fired = false;
       const v = this.video as HTMLVideoElement & {
         requestVideoFrameCallback: (cb: () => void) => number;
       };
       this.loopHandle = v.requestVideoFrameCallback(() => {
+        fired = true;
+        if (this.rvfcWatchdog) {
+          clearTimeout(this.rvfcWatchdog);
+          this.rvfcWatchdog = null;
+        }
         this.tick(gen);
         this.scheduleFrame(gen);
       });
+      // 1 秒内没等到第一帧就永久降级到 rAF
+      if (this.rvfcWatchdog) clearTimeout(this.rvfcWatchdog);
+      this.rvfcWatchdog = setTimeout(() => {
+        this.rvfcWatchdog = null;
+        if (fired || !this.running || gen !== this.generation) return;
+        this.forceRaf = true;
+        this.cancelFrameLoop();
+        this.detail = '视频帧回调未触发，已回退 rAF';
+        this.onStatus(this.status, this.detail);
+        this.scheduleFrame(gen);
+      }, 1000);
     } else {
       // 回退：rAF 在某些浏览器里比视频帧快，所以下面还会用 busy 挡一层
       this.loopKind = 'raf';
@@ -317,6 +347,10 @@ export class HolisticSession {
   }
 
   private cancelFrameLoop(): void {
+    if (this.rvfcWatchdog) {
+      clearTimeout(this.rvfcWatchdog);
+      this.rvfcWatchdog = null;
+    }
     if (this.loopHandle === null) return;
     if (this.loopKind === 'rvfc') {
       const v = this.video as HTMLVideoElement & { cancelVideoFrameCallback?: (h: number) => void };
@@ -350,6 +384,7 @@ export class HolisticSession {
   }
 
   private recordFrameTime(now: number, startedAt: number): void {
+    this.framesProcessedCount++;
     this.frameTimes.push(now);
     if (this.frameTimes.length > FPS_WINDOW) this.frameTimes.shift();
     this.lastInferenceMs = now - startedAt;
@@ -390,6 +425,13 @@ export class HolisticSession {
   get usingVideoFrameCallback(): boolean {
     return this.loopKind === 'rvfc';
   }
+
+  /** 已完成的推理帧数（诊断用：为 0 说明帧循环根本没跑起来） */
+  get framesProcessed(): number {
+    return this.framesProcessedCount;
+  }
+
+  private framesProcessedCount = 0;
 
   /** 官方连接拓扑（模型加载后才可用） */
   get connectionsOrNull(): HolisticConnections | null {
