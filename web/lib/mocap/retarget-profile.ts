@@ -49,8 +49,15 @@ export const RETARGET_PROFILE_ID = 'upper-body-v1';
  */
 export const RETARGET_IS_MEASURED = false;
 
-/** G2 首版只生成这些骨骼的轨道（上半身 + 头）。腿、手指、根位移、表情都不进。 */
-export const RETARGET_TARGET_BONES = [
+/**
+ * 参与**校准**的骨骼（上半身 + 头 + 腕）。
+ *
+ * 手指**刻意不在其中**：手指的"中立"就是伸直，源与目标本来就一致，
+ * 给它 30 根骨骼各算一个修正量只会多出 30 个出错的地方，
+ * 而且"标定时手指是蜷着的"会立刻污染修正量。
+ * 校准的可信度自检也只看这一批。
+ */
+export const CALIBRATED_BONES = [
   'spine',
   'chest',
   'neck',
@@ -63,6 +70,35 @@ export const RETARGET_TARGET_BONES = [
   'rightHand',
 ] as const;
 
+/** 手指的关节段名（VRM 与 Kalidokit 一致，拇指除外） */
+const FINGER_PARTS = ['Proximal', 'Intermediate', 'Distal'] as const;
+const FINGERS = ['Index', 'Middle', 'Ring', 'Little'] as const;
+
+/** VRM 的手指关节：`${侧}${指}${段}`，拇指多一根 Metacarpal */
+const fingerBone = (side: 'left' | 'right', finger: string, part: string) =>
+  `${side}${finger}${part}`;
+
+/** 四指 × 3 段 × 2 侧 + 拇指 3 段 × 2 侧 = 30 根 */
+export const FINGER_TARGET_BONES = [
+  ...(['left', 'right'] as const).flatMap((side) => [
+    ...FINGERS.flatMap((f) => FINGER_PARTS.map((p) => fingerBone(side, f, p))),
+    // 拇指在 VRM 里是 Metacarpal/Proximal/Distal（Kalidokit 是 Proximal/Intermediate/Distal，
+    // 整体挪一格：CMC→Metacarpal、MCP→Proximal、IP→Distal）
+    fingerBone(side, 'Thumb', 'Metacarpal'),
+    fingerBone(side, 'Thumb', 'Proximal'),
+    fingerBone(side, 'Thumb', 'Distal'),
+  ]),
+] as const;
+
+/**
+ * G2 驱动的全部骨骼（上半身 + 头 + 腕 + 手指）。
+ * 腿、根位移、表情仍不进。
+ */
+export const RETARGET_TARGET_BONES = [
+  ...CALIBRATED_BONES,
+  ...FINGER_TARGET_BONES,
+] as const;
+
 export type RetargetBone = (typeof RETARGET_TARGET_BONES)[number];
 
 export type Axis = 'x' | 'y' | 'z';
@@ -72,10 +108,10 @@ export interface XYZ {
   z: number;
 }
 
-/** 一根目标轴取自来源的哪根轴、什么符号 */
+/** 一根目标轴取自来源的哪根轴、什么符号。sign 为 0 表示"这根轴不映射"（保持基础站姿）。 */
 export interface AxisSpec {
   axis: Axis;
-  sign: 1 | -1;
+  sign: 1 | -1 | 0;
 }
 
 /**
@@ -84,17 +120,31 @@ export interface AxisSpec {
  */
 export type AxisTriple = readonly [AxisSpec, AxisSpec, AxisSpec];
 
+/**
+ * 来源属于哪一路输出。
+ *
+ * 显式声明而不是靠键名嗅探 —— 三路输出（姿态 / 面部 / 手部）的键名会长得很像，
+ * 靠字符串猜迟早会串。
+ */
+export type RuleScope = 'pose' | 'face' | 'hand';
+
 /** 单根目标骨骼的重定向规则 */
 export interface BoneRule {
   /** Kalidokit 输出里的键名 */
   from: string;
   /** 取多少。脊柱/头颈要拆成两段时用（0.35 / 0.65） */
   weight: number;
-  /** 轴映射与符号 —— ★ P3 标定的主要落点 */
+  /** 轴映射与符号 —— ★ 标定的主要落点 */
   axes: AxisTriple;
+  /**
+   * 来源在哪个输出里。默认 'pose'。
+   * scope 为 'hand' 时，**左右由 `from` 的前缀决定**（`Right*` → input.hands.right，
+   * `Left*` → input.hands.left），所以交换左右时只要换 `from` 就自动跟着走。
+   */
+  scope?: RuleScope;
 }
 
-const ax = (axis: Axis, sign: 1 | -1 = 1): AxisSpec => ({ axis, sign });
+const ax = (axis: Axis, sign: 1 | -1 | 0 = 1): AxisSpec => ({ axis, sign });
 
 /**
  * 左右成对的骨骼组。`swapLeftRight` 打开时，成对两侧的**来源键对调**，
@@ -109,9 +159,21 @@ const ax = (axis: Axis, sign: 1 | -1 = 1): AxisSpec => ({ axis, sign });
  *   正确的交换（z × +1）：right ← K.Left → +1.25 ✅
  */
 const SIDED_PAIRS: readonly (readonly [RetargetBone, RetargetBone])[] = [
+  // 手臂三段
   ['rightUpperArm', 'leftUpperArm'],
   ['rightLowerArm', 'leftLowerArm'],
   ['rightHand', 'leftHand'],
+  // ★ 手指 15 对 × 2（四指 3 段 + 拇指 3 段）
+  //   漏掉这些会得到"手臂对了、手指反了" —— 而且因为手指小、动作快，
+  //   现场很容易被当成"跟踪不准"而不是"映射漏了"。
+  ...(['Index', 'Middle', 'Ring', 'Little'] as const).flatMap((f) =>
+    (['Proximal', 'Intermediate', 'Distal'] as const).map(
+      (part) => [`right${f}${part}`, `left${f}${part}`] as const,
+    ),
+  ),
+  ...(['Metacarpal', 'Proximal', 'Distal'] as const).map(
+    (part) => [`rightThumb${part}`, `leftThumb${part}`] as const,
+  ),
 ];
 
 /**
@@ -210,6 +272,45 @@ const HEAD_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
 const SPINE_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
 
 /**
+ * ★ 需标定的常量 ④：手指与腕部的轴映射。
+ *
+ * 【已实测的部分】手指骨骼的轴语义（几何探针，双手都测了）：
+ *   · 绕 X 转 → 指尖几乎不动（0.03–0.18cm）  → **X = 手指长轴**
+ *   · 绕 Y 转 → 指尖沿"掌指关节连线"移动      → Y = 张开/并拢
+ *   · 绕 Z 转 → 指尖沿**手掌法线**移动          → **Z = 弯曲** ✅
+ *   双手结论一致，且**弯曲都是 +Z**（不按左右翻转）。
+ *   `hand` 骨骼同样测了：X=自转(twist)、Y=尺桡偏、Z=屈伸；也是双手同号。
+ *
+ * 【由源码推出的部分】符号：
+ *   kalidokit 的 rigFingers 里
+ *       trackedFinger.z = clamp(z * -PI * invert, side===RIGHT ? -PI : 0, side===RIGHT ? 0 : PI)
+ *   即 **右手恒负、左手恒正**。而我们双手弯曲都是 +Z，所以基准符号必须按侧区分：
+ *       right: z = −1（右手负 → 我们的正）
+ *       left : z = +1（左手正 → 我们的正）
+ *   这也解释了为什么手指**不能**照搬手臂的"两侧同号"。
+ *
+ * 【未实测的部分】腕部三个轴的符号（Kalidokit 的 Wrist.x=twist / z=左右，都乘了 invert；
+ *   y 的钳位左右不对称）。现在按与手指相同的按侧模式给初值，
+ *   用标定探针（选「手腕内旋」这类动作）可以一轮定下来。
+ */
+const HAND_AXES: Record<'right' | 'left', AxisTriple> = {
+  right: [ax('x', 1), ax('y', 1), ax('z', -1)],
+  left: [ax('x', 1), ax('y', 1), ax('z', 1)],
+};
+
+/** 腕部：X=自转、Y=尺桡偏、Z=屈伸。Kalidokit 的 Wrist 顺序是 x=twist / z=左右，故 Y←z、Z←y */
+const WRIST_MAP: Record<'right' | 'left', AxisTriple> = {
+  right: [ax('x', 1), ax('z', -1), ax('y', -1)],
+  left: [ax('x', 1), ax('z', 1), ax('y', 1)],
+};
+
+/** 拇指：Kalidokit 的 z 是弯曲主力，x/y 是做对掌的修正项 */
+const THUMB_MAP: Record<'right' | 'left', AxisTriple> = {
+  right: [ax('x', 0), ax('y', -1), ax('z', -1)],
+  left: [ax('x', 0), ax('y', 1), ax('z', 1)],
+};
+
+/**
  * 骨骼规则表。
  *
  * 脊柱拆两段（spine 35% / chest 65%）、头颈拆两段（neck 35% / head 65%）——
@@ -217,18 +318,75 @@ const SPINE_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
  * 肩（shoulder）**刻意不驱动**，保持 BASE_STANDING_POSE：
  * Kalidokit 没有稳定的肩骨输出，硬驱动会抖。
  */
+/**
+ * 手指规则的生成。
+ *
+ * 四指：VRM `${side}${Finger}${Part}` ← Kalidokit `${Side}${Finger}${Part}`（同名）
+ * 拇指：VRM 是 Metacarpal/Proximal/Distal，Kalidokit 是 Proximal/Intermediate/Distal
+ *       → 整体挪一格（CMC→Metacarpal、MCP→Proximal、IP→Distal）
+ *       VRM 的 ThumbMetacarpal 对应 Kalidokit 的 ThumbProximal；
+ *       我们只取弯曲（z）与张开（y），不自转（x 的 sign=0）——
+ *       Kalidokit 的拇指 x 是"对掌"修正项，不是绕长轴自转，硬映射会更糟。
+ */
+function buildFingerRules(): Record<string, BoneRule> {
+  const out: Record<string, BoneRule> = {};
+  const sides = [
+    { vrm: 'right', kd: 'Right' },
+    { vrm: 'left', kd: 'Left' },
+  ] as const;
+
+  for (const { vrm, kd } of sides) {
+    for (const finger of FINGERS) {
+      for (const part of FINGER_PARTS) {
+        out[fingerBone(vrm, finger, part)] = {
+          from: `${kd}${finger}${part}`,
+          weight: 1,
+          axes: HAND_AXES[vrm],
+          scope: 'hand',
+        };
+      }
+    }
+    // 拇指三根：名称错位一格
+    out[fingerBone(vrm, 'Thumb', 'Metacarpal')] = {
+      from: `${kd}ThumbProximal`,
+      weight: 1,
+      axes: THUMB_MAP[vrm],
+      scope: 'hand',
+    };
+    out[fingerBone(vrm, 'Thumb', 'Proximal')] = {
+      from: `${kd}ThumbIntermediate`,
+      weight: 1,
+      axes: THUMB_MAP[vrm],
+      scope: 'hand',
+    };
+    out[fingerBone(vrm, 'Thumb', 'Distal')] = {
+      from: `${kd}ThumbDistal`,
+      weight: 1,
+      axes: THUMB_MAP[vrm],
+      scope: 'hand',
+    };
+  }
+  return out;
+}
+
 export const RETARGET_RULES: Readonly<Record<RetargetBone, BoneRule>> = {
   spine: { from: 'Spine', weight: 0.35, axes: SPINE_AXES },
   chest: { from: 'Spine', weight: 0.65, axes: SPINE_AXES },
-  neck: { from: 'Face.head', weight: 0.35, axes: HEAD_AXES },
-  head: { from: 'Face.head', weight: 0.65, axes: HEAD_AXES },
+  // ★ scope 必须显式写 'face'：lookupSource 是按 scope 分支的，
+  //   漏写就会去 pose 输出里找 'Face.head'，永远取不到 ——
+  //   而症状是"头颈完全不动"，很容易被当成 FaceSolver 没输出。
+  neck: { from: 'Face.head', weight: 0.35, axes: HEAD_AXES, scope: 'face' },
+  head: { from: 'Face.head', weight: 0.65, axes: HEAD_AXES, scope: 'face' },
   rightUpperArm: { from: 'RightUpperArm', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
   rightLowerArm: { from: 'RightLowerArm', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
-  rightHand: { from: 'RightHand', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
   leftUpperArm: { from: 'LeftUpperArm', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
   leftLowerArm: { from: 'LeftLowerArm', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
-  leftHand: { from: 'LeftHand', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
-};
+  // ★ 腕部改用 `Hand.solve` 的 Wrist —— `Pose.solve` 的 Hand 只用身体点 15/17/19，
+  //   而且 x 完全不赋值（没有自转）。HandSolver 的 Wrist 有 x=自转。
+  rightHand: { from: 'RightWrist', weight: 1, axes: WRIST_MAP.right, scope: 'hand' },
+  leftHand: { from: 'LeftWrist', weight: 1, axes: WRIST_MAP.left, scope: 'hand' },
+  ...(buildFingerRules() as Record<RetargetBone, BoneRule>),
+} as Record<RetargetBone, BoneRule>;
 
 // ── 欧拉 → 四元数 ────────────────────────────────────────────────────────
 
@@ -269,6 +427,35 @@ export function mapEuler(src: XYZ, triple: AxisTriple): XYZ {
 
 // ── 左右交换 ─────────────────────────────────────────────────────────────
 
+/**
+ * 给某一只手的**关键点**解算时，`side` 参数该传哪一侧。
+ *
+ * 必须与 `swapLeftRight` 保持同一套约定：Kalidokit 的 `Right*` 键读的是
+ * MediaPipe 的 `left_*` 命名（F3 源码实锤），手部沿用同一套命名。
+ * 两边不一致就会出现"手臂对了、手指反了"。
+ */
+/**
+ * 成对骨骼覆盖自检。
+ *
+ * 用它而不是靠人记：新增一根带左右的骨骼却忘了加进 SIDED_PAIRS，
+ * 症状是"交换左右后这根骨骼没跟着换"，很难联想到是清单漏了。
+ * （写手指时就真的漏过一次。）
+ */
+export function findUnpairedSidedBones(): string[] {
+  const paired = new Set(SIDED_PAIRS.flatMap(([a, b]) => [a as string, b as string]));
+  return RETARGET_TARGET_BONES.filter((b) => {
+    const s = b as string;
+    if (s.startsWith('right')) return !paired.has(s) && !paired.has('left' + s.slice(5));
+    if (s.startsWith('left')) return !paired.has(s) && !paired.has('right' + s.slice(4));
+    return false; // 中线骨骼不需要成对
+  });
+}
+
+export function handSideFor(landmarkSide: 'left' | 'right'): 'Right' | 'Left' {
+  if (swapLeftRight) return landmarkSide === 'left' ? 'Right' : 'Left';
+  return landmarkSide === 'left' ? 'Left' : 'Right';
+}
+
 /** 把规则表按 swapLeftRight 解析成「目标骨骼 → 实际使用的规则」 */
 export function resolveRules(swap: boolean = swapLeftRight): Record<RetargetBone, BoneRule> {
   const out = {} as Record<RetargetBone, BoneRule>;
@@ -277,10 +464,15 @@ export function resolveRules(swap: boolean = swapLeftRight): Record<RetargetBone
     for (const [a, b] of SIDED_PAIRS) {
       const ra = out[a];
       const rb = out[b];
-      // ★ 来源键对调 **且** 镜像奇性轴取反 —— 两件事必须一起做，
-      //   只换来源键会得到「左右对了但上下反了」（实测反馈）。
-      out[a] = { ...rb, axes: mirrorAxes(rb.axes) };
-      out[b] = { ...ra, axes: mirrorAxes(ra.axes) };
+      // ★ 两件事必须一起做：
+      //   1) 来源键对调
+      //   2) **目标自己的**轴约定做镜像（注意不是"换进来的那个来源"的轴）
+      // 第 2 条容易被写错。对左右同号的手臂看不出来（两者等价），
+      // 但对**左右异号**的手指就会错 —— 手指的 Kalidokit 输出右负左正，
+      // 而我们的弯曲方向双手都是 +Z，所以基准符号必须按侧区分。
+      // 镜像作用在目标上才是对的语义：镜像描述的是"这根骨骼坐在镜线的哪一侧"。
+      out[a] = { ...rb, weight: ra.weight, axes: mirrorAxes(ra.axes) };
+      out[b] = { ...ra, weight: rb.weight, axes: mirrorAxes(rb.axes) };
     }
   }
   return out;
@@ -302,14 +494,31 @@ export interface KalidokitPoseLike {
   [key: string]: XYZ | null | undefined;
 }
 
+/**
+ * Kalidokit HandSolver 的输出形状：`{ RightWrist: {x,y,z}, RightIndexProximal: {...}, ... }`
+ * 在这里定义（而不是从 solver 引入），是为了让本文件保持零依赖 —— 它要被 Node 直接加载。
+ */
+export type KalidokitHandLike = Record<string, XYZ | null | undefined>;
+
 export interface KalidokitFaceLike {
   head?: XYZ | null;
   [key: string]: unknown;
 }
 
+/**
+ * 手部来源。
+ *
+ * 命名按"来自哪一只手的关键点"：`hands.left` = 由 `leftHandLandmarks` 解出来的。
+ * 用哪一侧的 `side` 参数去解，取决于 `swapLeftRight`（见 handSideFor）——
+ * 与姿态那边保持同一套左右约定，否则会出现"手臂对了手指反了"。
+ */
 export interface RetargetInput {
   pose: KalidokitPoseLike | null;
   face?: KalidokitFaceLike | null;
+  hands?: {
+    left?: KalidokitHandLike | null;
+    right?: KalidokitHandLike | null;
+  } | null;
 }
 
 export interface RetargetOutput {
@@ -319,11 +528,19 @@ export interface RetargetOutput {
   missing: RetargetBone[];
 }
 
-/** 取来源值；支持 `Face.head` 这种带前缀的键 */
-function lookupSource(from: string, input: RetargetInput): XYZ | null {
-  if (from.startsWith('Face.')) {
-    const key = from.slice('Face.'.length);
+/** 取来源值。scope 决定去哪一路输出里找；hand 的左右由 `from` 前缀决定。 */
+function lookupSource(rule: BoneRule, input: RetargetInput): XYZ | null {
+  const { from, scope = 'pose' } = rule;
+  if (scope === 'face') {
+    const key = from.startsWith('Face.') ? from.slice('Face.'.length) : from;
     const v = input.face?.[key];
+    return isXYZ(v) ? v : null;
+  }
+  if (scope === 'hand') {
+    // `from` 的前缀就是左右：交换左右时 from 被换掉，这里自动跟着走，不需要额外字段
+    const side = from.startsWith('Right') ? 'right' : from.startsWith('Left') ? 'left' : null;
+    if (!side) return null;
+    const v = input.hands?.[side]?.[from];
     return isXYZ(v) ? v : null;
   }
   const v = input.pose?.[from];
@@ -351,7 +568,7 @@ export function retarget(input: RetargetInput, swap: boolean = swapLeftRight): R
 
   for (const bone of RETARGET_TARGET_BONES) {
     const rule = rules[bone];
-    const src = lookupSource(rule.from, input);
+    const src = lookupSource(rule, input);
     if (!src) {
       missing.push(bone);
       continue;

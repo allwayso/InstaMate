@@ -20,7 +20,7 @@
 import { baseQuatOf, mulQ, normalizeQ } from '../pose.ts';
 import type { Pose, Quat } from '../pose.ts';
 import { MOCAP_LIMITS } from './mocap-types.ts';
-import { RETARGET_TARGET_BONES } from './retarget-profile.ts';
+import { CALIBRATED_BONES, RETARGET_TARGET_BONES } from './retarget-profile.ts';
 import type { RetargetBone } from './retarget-profile.ts';
 
 /** 单位四元数的逆（共轭）。只对已规范化的四元数成立。 */
@@ -65,10 +65,16 @@ export function averageQuats(qs: readonly Quat[]): Quat | null {
   return dot(first, second) < 0 ? first : second;
 }
 
-/** 按每根骨骼把一组样本平均成一个「中立规范化姿态」 */
+/**
+ * 按每根骨骼把一组样本平均成一个「中立规范化姿态」。
+ *
+ * ★ 只用 CALIBRATED_BONES（10 根），**不含手指**：
+ *   手指的"中立"就是伸直，源与目标本来就一致；给 30 根手指各算一个修正量
+ *   只会多出 30 个出错的地方，而且"标定时手指蜷着"会立刻污染结果。
+ */
 export function averagePose(samples: readonly Pose[]): Pose {
   const out: Pose = {};
-  for (const bone of RETARGET_TARGET_BONES) {
+  for (const bone of CALIBRATED_BONES) {
     const qs = samples.map((s) => s[bone]).filter((q): q is Quat => Array.isArray(q) && q.length === 4);
     const avg = averageQuats(qs);
     if (avg) out[bone] = avg;
@@ -86,7 +92,7 @@ export function averagePose(samples: readonly Pose[]): Pose {
  */
 export function computeCorrections(neutral: Pose, basePose?: Pose): Pose {
   const out: Pose = {};
-  for (const bone of RETARGET_TARGET_BONES) {
+  for (const bone of CALIBRATED_BONES) {
     const qn = neutral[bone];
     if (!qn) continue;
     const qb = basePose?.[bone] ?? baseQuatOf(bone);
@@ -284,7 +290,7 @@ export class CalibrationSession {
     }
 
     const neutralPose = accepted.length ? averagePose(accepted.map((f) => f.canonical)) : {};
-    const missingBones = RETARGET_TARGET_BONES.filter((b) => !neutralPose[b]);
+    const missingBones = CALIBRATED_BONES.filter((b) => !neutralPose[b]);
     if (accepted.length && missingBones.length) {
       issues.push(`以下骨骼没有可用的中立样本：${missingBones.join(', ')}`);
     }

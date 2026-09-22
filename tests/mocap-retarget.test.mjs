@@ -14,6 +14,8 @@ import {
   resolveRules,
   RETARGET_RULES,
   RETARGET_TARGET_BONES,
+  CALIBRATED_BONES,
+  findUnpairedSidedBones,
   RETARGET_IS_MEASURED,
 } from '../web/lib/mocap/retarget-profile.ts';
 import {
@@ -101,11 +103,35 @@ test('轴映射与符号按规则生效', () => {
 
 test('每根目标骨骼都有规则，且来源键是已知的 Kalidokit 键', () => {
   const known = new Set(['Spine', 'Face.head', ...Object.keys(KALIDOKIT_SOURCE_POINTS)]);
+  // 手部（HandSolver）的键：${Right|Left}Wrist 与 5 指 × 3 段
+  for (const side of ['Right', 'Left']) {
+    known.add(`${side}Wrist`);
+    for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Little']) {
+      for (const seg of ['Proximal', 'Intermediate', 'Distal']) known.add(`${side}${f}${seg}`);
+    }
+  }
   for (const bone of RETARGET_TARGET_BONES) {
     const rule = RETARGET_RULES[bone];
     assert.ok(rule, `${bone} 没有规则`);
     assert.ok(known.has(rule.from), `${bone} 的来源键 ${rule.from} 不是已知的 Kalidokit 键`);
   }
+});
+
+test('★ 手部来源的 scope 必须是 hand（否则会去姿态输出里找，永远取不到）', () => {
+  for (const b of ['rightHand', 'leftHand']) {
+    assert.equal(RETARGET_RULES[b].scope, 'hand', `${b} 的 scope 应为 hand`);
+  }
+  assert.equal(RETARGET_RULES.rightIndexProximal.scope, 'hand');
+  assert.equal(RETARGET_RULES.rightThumbMetacarpal.scope, 'hand');
+});
+
+test('★ 头颈来源的 scope 必须是 face（漏写会表现为"头颈完全不动"）', () => {
+  assert.equal(RETARGET_RULES.neck.scope, 'face');
+  assert.equal(RETARGET_RULES.head.scope, 'face');
+});
+
+test('★ 所有带左右的骨骼都必须成对登记（漏一个会表现为"交换后这根没跟着换"）', () => {
+  assert.deepEqual(findUnpairedSidedBones(), [], '有骨骼没登记进 SIDED_PAIRS');
 });
 
 test('脊柱 35/65、头颈 35/65 权重拆分正确', () => {
@@ -164,8 +190,26 @@ const KALIDOKIT_REST_FULL = {
 };
 const FACE_REST = { head: { x: 0, y: 0, z: 0 } };
 
+/**
+ * 手部的静息输出（HandSolver 形状）：腕 + 5 指 × 3 段，全为 0。
+ * 腕部现在走 HandSolver 而不是 PoseSolver，所以校准测试也必须喂它。
+ */
+function handsRest() {
+  const h = {};
+  for (const side of ['Right', 'Left']) {
+    h[`${side}Wrist`] = { x: 0, y: 0, z: 0 };
+    for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Little']) {
+      for (const seg of ['Proximal', 'Intermediate', 'Distal']) {
+        h[`${side}${f}${seg}`] = { x: 0, y: 0, z: 0 };
+      }
+    }
+  }
+  return h;
+}
+const HANDS_REST = { left: handsRest(), right: handsRest() };
+
 test('★ 静息不变式：Kalidokit 的静息值映射到我们的静息值（swap = false）', () => {
-  const out = retarget({ pose: KALIDOKIT_REST }, false);
+  const out = retarget({ pose: KALIDOKIT_REST, hands: HANDS_REST }, false);
   const dR = angleBetween(out.pose.rightUpperArm, baseQuatOf('rightUpperArm'));
   const dL = angleBetween(out.pose.leftUpperArm, baseQuatOf('leftUpperArm'));
   assert.ok(dR < 1, `右臂静息偏差 ${dR.toFixed(3)}°（应当很小）`);
@@ -177,7 +221,7 @@ test('★★ 静息不变式在 swap = true 时**同样**必须成立（这就�
   //   right ← K.Left 且 z × −1  →  −(+1.25) = −1.25
   // 而我们的右臂静息是 +1.257 —— 差了 2.5 弧度（约 143°），
   // 表现就是"左右对了，但手臂被压下去 / 上下反了"。
-  const out = retarget({ pose: KALIDOKIT_REST }, true);
+  const out = retarget({ pose: KALIDOKIT_REST, hands: HANDS_REST }, true);
   const dR = angleBetween(out.pose.rightUpperArm, baseQuatOf('rightUpperArm'));
   const dL = angleBetween(out.pose.leftUpperArm, baseQuatOf('leftUpperArm'));
   assert.ok(dR < 1, `交换后右臂静息偏差 ${dR.toFixed(3)}°（>1° 说明符号没跟着换）`);
@@ -233,16 +277,18 @@ test('resolveRules 不修改原始规则表（避免污染全局状态）', () =
 // ── 4. ★ 校准恒等式：中立输入必须得到基础站姿 ──────────────────────────
 
 test('★ 校准：中立输入经校准后精确等于 BASE_STANDING_POSE', () => {
-  // 造一个"中立姿态"：故意用真实形状的数（Kalidokit 的 rig 空间量级）
+  // 只对 CALIBRATED_BONES（10 根）成立 —— 手指**刻意不校准**：
+  // 手指的"中立"就是伸直，源与目标本来就一致，给 30 根各算一个修正量
+  // 只会多出 30 个出错的地方。见下面那条专门断言。
   const neutral = {};
-  for (const b of RETARGET_TARGET_BONES) {
+  for (const b of CALIBRATED_BONES) {
     neutral[b] = eulerXYZToQuat({ x: 0.13 * (b.length % 3), y: -0.21, z: 0.37 });
   }
 
   const corrections = computeCorrections(neutral);
   const target = applyCalibration(neutral, corrections);
 
-  for (const b of RETARGET_TARGET_BONES) {
+  for (const b of CALIBRATED_BONES) {
     const expected = baseQuatOf(b);
     assert.ok(
       maxDiff(target[b], expected) < 1e-9,
@@ -263,7 +309,7 @@ test('★★ 静息不变式的推论：两种左右配置下，校准修正量�
   const limits = { rightUpperArm: 5, leftUpperArm: 5, rightLowerArm: 15, leftLowerArm: 15 };
   const seen = {};
   for (const swap of [false, true]) {
-    const neutral = retarget({ pose: KALIDOKIT_REST }, swap).pose;
+    const neutral = retarget({ pose: KALIDOKIT_REST, hands: HANDS_REST }, swap).pose;
     const corrections = computeCorrections(neutral);
     for (const [bone, limit] of Object.entries(limits)) {
       const deg = angleBetween(corrections[bone], [0, 0, 0, 1]);
@@ -279,9 +325,18 @@ test('★★ 静息不变式的推论：两种左右配置下，校准修正量�
   }
 });
 
+test('★ 校准：手指刻意不校准（拿不到修正量时原样通过）', () => {
+  const q = eulerXYZToQuat({ x: 0.2, y: 0.1, z: 0.3 });
+  const neutral = { rightIndexProximal: q, rightThumbMetacarpal: q };
+  const corrections = computeCorrections(neutral);
+  assert.equal(corrections.rightIndexProximal, undefined, '手指不该有修正量');
+  const out = applyCalibration(neutral, corrections);
+  assert.ok(maxDiff(out.rightIndexProximal, q) < 1e-15, '手指应当原样通过');
+});
+
 test('★ 校准：非中立输入会偏离基础站姿（证明校准不是恒等变换）', () => {
   const neutral = {};
-  for (const b of RETARGET_TARGET_BONES) neutral[b] = eulerXYZToQuat({ x: 0.13, y: -0.21, z: 0.37 });
+  for (const b of CALIBRATED_BONES) neutral[b] = eulerXYZToQuat({ x: 0.13, y: -0.21, z: 0.37 });
   const corrections = computeCorrections(neutral);
 
   // 抬手 30°（绕 Z）
@@ -350,7 +405,7 @@ function mkCalibrationFrames({ n = 65, tracked = true, confidence = 0.9, stepMs 
   // 用**真实的 Kalidokit 静息**而不是"给所有骨骼套一个任意旋转"：
   // 后者会让头部出现约 30° 的修正量，被校准可信度检查拦下 ——
   // 那是测试数据不真实，不是检查太严。
-  const canonical = retarget({ pose: KALIDOKIT_REST_FULL, face: FACE_REST }, true).pose;
+  const canonical = retarget({ pose: KALIDOKIT_REST_FULL, face: FACE_REST, hands: HANDS_REST }, true).pose;
   const conf = {};
   for (const b of RETARGET_TARGET_BONES) conf[b] = confidence;
   const frames = [];
@@ -371,8 +426,9 @@ test('校准：检测率与时长都达标时通过，并给出中立姿态与�
   const out = runCalibration(mkCalibrationFrames({}));
   assert.equal(out.ok, true, `不该失败：${out.issues.join('; ')}`);
   assert.ok(out.detectionRate >= MOCAP_LIMITS.calibrationMinDetectionRate);
-  assert.ok(Object.keys(out.neutralPose).length === RETARGET_TARGET_BONES.length);
-  assert.ok(Object.keys(out.corrections).length === RETARGET_TARGET_BONES.length);
+  // 校准只覆盖 CALIBRATED_BONES（10 根）；手指刻意不校准
+  assert.equal(Object.keys(out.neutralPose).length, CALIBRATED_BONES.length);
+  assert.equal(Object.keys(out.corrections).length, CALIBRATED_BONES.length);
 });
 
 test('校准：检测率不足 80% 必须拒绝', () => {
@@ -402,8 +458,9 @@ test('★★ 校准：标定时把手抬起来 → 必须被拒绝（这是真�
     RightUpperArm: { x: 0, y: 0, z: -0.3 },
     LeftUpperArm: { x: 0, y: 0, z: 0.3 },
   };
-  const GOOD = { ok: true, canonical: retarget({ pose: KALIDOKIT_REST_FULL, face: FACE_REST }, true).pose };
-  const BAD = { ok: true, canonical: retarget({ pose: K_RAISED, face: FACE_REST }, true).pose };
+  const rt = (pose) => retarget({ pose, face: FACE_REST, hands: HANDS_REST }, true).pose;
+  const GOOD = { ok: true, canonical: rt(KALIDOKIT_REST_FULL) };
+  const BAD = { ok: true, canonical: rt(K_RAISED) };
 
   const runWith = (canonical) => {
     const frames = [];

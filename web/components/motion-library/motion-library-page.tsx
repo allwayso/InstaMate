@@ -30,6 +30,7 @@ import type { Pose } from '@/lib/pose';
 import {
   RETARGET_TARGET_BONES,
   RETARGET_IS_MEASURED,
+  handSideFor,
   retarget,
   swapLeftRight as DEFAULT_SWAP,
 } from '@/lib/mocap/retarget-profile';
@@ -84,8 +85,11 @@ const STATE_LABEL: Record<MachineState, string> = {
   error: '出错',
 };
 
-/** 10 根目标骨骼的基础站姿（缺省 identity） */
-function basePose10(): Pose {
+/**
+ * 全部目标骨骼的基础站姿（缺省 identity）。
+ * 含 30 根手指 —— 它们的基础站姿就是伸直（identity），正好对应"手指自然伸展"。
+ */
+function basePoseAll(): Pose {
   const out: Pose = {};
   for (const b of RETARGET_TARGET_BONES) out[b] = baseQuatOf(b);
   return out;
@@ -164,7 +168,7 @@ export default function MotionLibraryPage() {
   const swapRef = useRef(swap);
   swapRef.current = swap;
 
-  const base = useMemo(basePose10, []);
+  const base = useMemo(basePoseAll, []);
 
   // ── 启动自检：本地资源齐不齐 ─────────────────────────────────────────
   useEffect(() => {
@@ -257,6 +261,15 @@ export default function MotionLibraryPage() {
       const kp = solver?.solvePose(frame.poseLandmarks, frame.poseWorldLandmarks, { imageSize }) ?? null;
       const kf = solver?.solveFace(frame.faceLandmarks, { imageSize }) ?? null;
 
+      // 手部：走**独立**的 HandSolver 通路（16 关节/手，含腕部自转）。
+      // side 参数必须跟 swapLeftRight 同一套约定，否则会出现"手臂对了手指反了"。
+      const hands = solver
+        ? {
+            left: solver.solveHand(frame.leftHandLandmarks, handSideFor('left')),
+            right: solver.solveHand(frame.rightHandLandmarks, handSideFor('right')),
+          }
+        : null;
+
       // 1.5) 标定探针采样（记录**重定向前**的原始输出）
       const probe = probeRef.current;
       if (probe) {
@@ -275,10 +288,12 @@ export default function MotionLibraryPage() {
         };
         push(kp as Record<string, unknown> | null);
         push(kf as Record<string, unknown> | null, 'Face.');
+        push(hands?.left as Record<string, unknown> | null, 'L.');
+        push(hands?.right as Record<string, unknown> | null, 'R.');
       }
 
-      // 2) 重定向 → 规范化姿态（10 根骨骼）
-      const rt = retarget({ pose: kp, face: kf }, swapRef.current);
+      // 2) 重定向 → 规范化姿态（40 根：上半身 + 头 + 腕 + 30 根手指）
+      const rt = retarget({ pose: kp, face: kf, hands }, swapRef.current);
 
       // 3) 校准采样（用**未修正**的 canonical —— 修正量正是从它算出来的）
       if (stateRef.current === 'calibrating') {

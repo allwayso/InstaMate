@@ -18,7 +18,7 @@
  *     极易误判成 kalidokit 坏了。（实测：归一化 → z 恒为 −1.25；米制 → z 随姿态变。）
  */
 import type { Landmark, MocapRawFrame } from './mocap-types.ts';
-import type { KalidokitFaceLike, KalidokitPoseLike, XYZ } from './retarget-profile.ts';
+import type { KalidokitFaceLike, KalidokitHandLike, KalidokitPoseLike, XYZ } from './retarget-profile.ts';
 
 export const KALIDOKIT_VERSION = '1.1.5';
 
@@ -28,6 +28,23 @@ export interface SolverVector {
   y: number;
   z: number;
   visibility?: number;
+}
+
+/**
+ * Kalidokit 的 Side 常量（`constants.js` 里 RIGHT='Right' / LEFT='Left'）。
+ * 写死字符串而不是 import，是为了让本模块在 Node 侧也能加载
+ * （顶层 import kalidokit 会让 Node 直接挂 —— 见文件头第 1 条）。
+ */
+export const SOLVER_SIDE = { right: 'Right', left: 'Left' } as const;
+
+/** 手部关键点是否够用（21 点且坐标齐全） */
+export function isHandUsable(hand: Landmark[] | null): boolean {
+  if (!hand || hand.length < 21) return false;
+  for (let i = 0; i < 21; i++) {
+    const p = hand[i];
+    if (!p || p.x === null || p.y === null || p.z === null) return false;
+  }
+  return true;
 }
 
 /**
@@ -109,6 +126,19 @@ export interface MocapSolver {
   readonly version: string;
   solvePose(pose: Landmark[] | null, world: Landmark[] | null, opts: SolveOptions): KalidokitPoseLike | null;
   solveFace(face: Landmark[] | null, opts: SolveOptions): KalidokitFaceLike | null;
+  /**
+   * 从 21 个手部关键点解算手指与腕部。
+   *
+   * ★ 这是与 `solvePose` **完全独立**的一条通路：
+   *   · `solvePose` 的 Hand 只用身体点 15/17/19 推腕部（粗，且 x 完全不赋值 → 没有自转）
+   *   · `solveHand` 用 21 个手部点算出 16 个关节：Wrist + 5 指 × 3 段
+   *   Kalidokit 的 HandSolver 早就提供它，只是我们之前没调用。
+   *
+   * `side` 传 'Right' / 'Left'（Kalidokit 的 Side 枚举值）。
+   * 注意与 F3 的一致性：Kalidokit 的 Right 对应 MediaPipe 的 left_* 命名，
+   * 所以这里传哪一侧要跟 `swapLeftRight` 保持同一套约定。
+   */
+  solveHand(hand: Landmark[] | null, side: 'Right' | 'Left'): KalidokitHandLike | null;
 }
 
 /** 从 Holistic 的一帧结果里切出求解器需要的两组身体点 */
@@ -135,6 +165,9 @@ export async function createKalidokitSolver(): Promise<MocapSolver> {
     };
     Face: {
       solve: (lm: SolverVector[], opts: Record<string, unknown>) => KalidokitFaceLike | undefined;
+    };
+    Hand: {
+      solve: (lm: SolverVector[], side: string) => KalidokitHandLike | undefined;
     };
   };
 
@@ -166,6 +199,19 @@ export async function createKalidokitSolver(): Promise<MocapSolver> {
       });
       return out ?? null;
     },
+
+    solveHand(hand, side) {
+      // 手部 21 点，每点都必需 —— 少一个就会算出错的关节角
+      if (!hand || hand.length < 21) return null;
+      const v: SolverVector[] = [];
+      for (let i = 0; i < 21; i++) {
+        const p = hand[i];
+        if (!p || p.x === null || p.y === null || p.z === null) return null;
+        v.push({ x: p.x, y: p.y, z: p.z });
+      }
+      const out = mod.Hand.solve(v, side);
+      return out ?? null;
+    },
   };
 }
 
@@ -188,6 +234,9 @@ export function createStubSolver(
       return k ? (poseByKey[k] ?? null) : null;
     },
     solveFace() {
+      return null;
+    },
+    solveHand() {
       return null;
     },
   };

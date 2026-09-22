@@ -26,6 +26,7 @@ import { slerp } from '../pose.ts';
 import type { Pose, Quat } from '../pose.ts';
 import { MOCAP_LIMITS, type Landmark, type MocapRawFrame } from './mocap-types.ts';
 import { resolveRules } from './retarget-profile.ts';
+import { isHandUsable } from './kalidokit-solver.ts';
 import type { RetargetBone } from './retarget-profile.ts';
 
 /** MediaPipe Pose 关键点索引（33 点口径） */
@@ -54,7 +55,18 @@ export const KALIDOKIT_SOURCE_POINTS: Record<string, readonly number[]> = {
   Spine: [MP.leftShoulder, MP.rightShoulder, MP.leftHip, MP.rightHip],
 };
 
-/** 哪些来源键需要借助手部关键点提高置信度（腕点 + 手部点） */
+/**
+ * 手部来源键 → 用哪一侧的手部关键点。
+ *
+ * ★ 手部关键点**没有 visibility 字段**（实测：整段录制里 21 个点的 visibility 全是 null）。
+ *   所以手部的置信度只能是"全有 / 全无"：21 个点都在且坐标有限 → 1，否则 0。
+ *   这也意味着手部会整只地出现/消失，而不是逐点退化 ——
+ *   抖动由平滑器的三级回退兜住，不要在置信度上再叠一层假的连续量。
+ */
+/**
+ * 仍然由 `Pose.solve` 输出的两个旧 Hand 键（腕部已改走 HandSolver，但枚举里还留着）。
+ * 它们借助身体点 15/17/19 估掌朝向，仍可作为腕部的兜底置信来源。
+ */
 const HAND_SOURCES: Record<string, 'leftHandLandmarks' | 'rightHandLandmarks'> = {
   // Kalidokit 的 RightHand 读 lm[15]/[17]/[19] = MediaPipe 左手
   RightHand: 'leftHandLandmarks',
@@ -115,21 +127,40 @@ export function computeSourceConfidence(frame: MocapRawFrame): Record<string, nu
       continue;
     }
     let c = Math.min(...idxs.map((i) => vis(pose[i])));
-
     const handKey = HAND_SOURCES[source];
     if (handKey) {
       const hand = frame[handKey];
       if (!hand || hand.length === 0) {
-        // 手部点整体缺失：腕点还能用，但打个折 —— 手指/掌朝向不可信
-        c = Math.min(c, 0.6);
+        c = Math.min(c, 0.6); // 手部点整体缺失：腕点还能用，但掌朝向不可信
       } else {
-        c = Math.min(1, Math.max(0, c * 0.5 + mean(hand.map((l) => vis(l))) * 0.5));
+        // isHandUsable 是布尔值，显式转 1/0 —— 直接参与算术 TS 会拦（也是好事）
+        c = Math.min(1, Math.max(0, c * 0.5 + (isHandUsable(hand) ? 1 : 0) * 0.5));
       }
     }
     out[source] = Math.max(0, Math.min(1, c));
   }
 
   out['Face.head'] = faceConfidence(frame);
+
+  // ── 手部来源（HandSolver 的关节键）──────────────────────────────────
+  // 全有 / 全无，理由见 HAND_SOURCE_PREFIX 上方
+  for (const [side, key] of [
+    ['Right', 'leftHandLandmarks'],
+    ['Left', 'rightHandLandmarks'],
+  ] as const) {
+    const hand = frame[key];
+    const c = isHandUsable(hand) ? 1 : 0;
+    out[`${side}Wrist`] = c;
+    for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Little']) {
+      for (const seg of ['Proximal', 'Intermediate', 'Distal']) {
+        out[`${side}${f}${seg}`] = c;
+      }
+    }
+  }
+  // Kalidokit 的 Pose 输出里那两个 Hand 键（现在不再驱动腕部，但保留以免别处引用出错）
+  out['RightHand'] = out['RightWrist'] ?? 0;
+  out['LeftHand'] = out['LeftWrist'] ?? 0;
+
   return out;
 }
 
