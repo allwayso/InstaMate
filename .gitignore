@@ -10,6 +10,17 @@
 # VRM 资产：体积大 + 有许可约束，用 tools/fetch-assets.sh 拉取，不进仓库
 *.vrm
 
+# MediaPipe 的 wasm/模型（约 38 MB）：由 npm 包派生，用 node tools/sync-mediapipe.mjs 生成
+web/public/vendor/
+
+# G2 录制的原始关键点：单段可能 5–10 MB，体积不适合入库。
+# 动作本体（web/public/clips/<id>.json，约 100 KB）仍然入库，它是团队共享资产。
+# 代价：新克隆后动作库页面的「下载原始关键点」不可用，页面上会标注「仅本机」。
+data/mocap/
+
+# 联网调研的原始结果，与实现无关
+.firecrawl/
+
 # 依赖与构建产物（web/.gitignore 已覆盖 web/ 内，这里是根目录安全网）
 node_modules/
 .next/
