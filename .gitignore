@@ -10,6 +10,14 @@
 # VRM 资产：体积大 + 有许可约束，用 tools/fetch-assets.sh 拉取，不进仓库
 *.vrm
 
+# 第三方模型资产（FBX/GLB）：体积大 + 许可不明，不进仓库
+*.fbx
+*.glb
+*.usdz
+
+# Tripo 导出包（队友给的生成资产，本地分析用）
+tripo_asset_*/
+
 # MediaPipe 的 wasm/模型（约 38 MB）：由 npm 包派生，用 node tools/sync-mediapipe.mjs 生成
 web/public/vendor/
 
