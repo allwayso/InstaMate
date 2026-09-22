@@ -13,6 +13,8 @@
 .
 ├─ docs/                     文档与规范
 │  ├─ Collaborate.md         ★ 实施主文档：角色划分 / 接口契约 / 时间线 / 验收门槛 G0–G5
+│  ├─ 动作库接入说明.md       ★ clip v1 格式、轴向约定、三种接入方式、动捕接入流程
+│  ├─ G1-验收记录.md          G1 自动化与人工验收证据
 │  ├─ P0-A-第一步-方案与验收.md  实测数据与踩坑记录（资产能力、G0 证据、环境纪律）
 │  └─ 赛道一_…_组队提案书.md/.pdf  比赛提交材料（不作为实施依据）
 ├─ web/                      Next.js 16 应用（App Router + TypeScript）
@@ -23,16 +25,25 @@
 │  │  └─ display-case.tsx    3D 展示台：加载 VRM + 三点光 + 环绕检视
 │  ├─ lib/
 │  │  ├─ contracts.ts        ★ 三份接口契约（唯一真相源）
+│  │  ├─ clip-spec.ts        ★ clip v1 规格与校验规则（浏览器与 CLI 共用）
+│  │  ├─ pose.ts             姿态数学与实测轴向约定、基础站姿
+│  │  ├─ clip-player.ts      动作播放器（采样/混合/淡入淡出，不持有 VRM）
+│  │  ├─ character-runtime.ts 唯一写身体骨骼的地方
+│  │  ├─ clip-catalog.ts     动作目录、加载与导入
 │  │  ├─ human-bones-vrm1.json  VRM 1.0 规范 55 根骨骼冻结表
 │  │  └─ vrm-character.ts    VRM 加载器 + 运行时能力探测
-│  └─ public/avatars/        VRM 资产（不进 git，用 tools/fetch-assets.mjs 拉取）
+│  ├─ public/avatars/        VRM 资产（不进 git，用 tools/fetch-assets.mjs 拉取）
+│  └─ public/clips/          动作库（clip v1 JSON + index.json 目录）
 ├─ tools/                    命令行工具
 │  ├─ fetch-assets.mjs       拉取示例 VRM（多镜像回退 + sha256 校验）
 │  ├─ fetch-assets.sh        同上，bash 薄封装
+│  ├─ gen-clips.mjs          程序化动作生成器（产出即自检）
 │  ├─ inspect-vrm.mjs        读取 .vrm 的骨骼/表情/弹簧骨/lookAt 能力
-│  ├─ validate-clip.mjs      动作文件（clip v1）校验器
+│  ├─ validate-clip.mjs      动作文件（clip v1）校验器（支持 --all / --fixtures / --target）
 │  └─ dev-browser.sh         无头浏览器进程管家（仅 Windows）
-├─ tests/fixtures/           validate-clip 的测试夹具（6 个故意做坏的 + 1 个合法）
+├─ tests/
+│  ├─ fixtures/              validate-clip 的夹具（6 个故意做坏的 + 1 个合法）
+│  └─ clip-player.test.mjs   播放与插值的纯逻辑测试（15 项）
 ├─ assets/vrm/               VRM 的 manifest（资产本身不进 git）
 └─ PLAN.md                   本轮实施计划
 ```
@@ -65,13 +76,16 @@ npm run dev
 
 打开 **http://localhost:3000** —— 应看到 Seed-san 角色 + 右侧「G0 · 静态资产」面板。
 
-**操作**：左键拖动旋转 · 右键拖动平移 · Shift + 左键平移 · Shift + 右键旋转 · 滚轮缩放 · 「归位视角」复位。
+**观察操作**：左键拖动旋转 · 右键拖动平移 · Shift + 左键平移 · Shift + 右键旋转 · 滚轮缩放 · 「归位视角」复位。
+
+**G1 动作控件**（右侧面板）：动作选择 · 播放/暂停/继续/停止 · 循环 · 时间轴（拖动即逐帧定位并暂停）·
+骨架辅助线 · 「恢复基础站姿」「参考姿态」· 导入本地 JSON。
 
 ### 启动成功的判据
 
 | 检查 | 期望 |
 |---|---|
-| 页面 | 角色静止站立、面色与服装贴图正常，不是黑块也不是空白 |
+| 页面 | 角色**双臂自然下垂**站立（基础站姿，**不是 T-pose**）、贴图正常，不是黑块也不是空白 |
 | HUD「骨骼」 | `51 / 55，缺 upperChest, leftEye, rightEye, jaw` |
 | HUD「表情 preset」 | `18` |
 | HUD「弹簧骨」 | `9 组 / 19 关节 / 8 碰撞体` |
@@ -92,7 +106,10 @@ npm run dev
 | `npm run build` | 生产构建 |
 | `npm run typecheck` | `next typegen && tsc --noEmit`（**首次克隆必须先跑这个或 build**，见下方坑） |
 | `npm run inspect:vrm` | 打印示例 VRM 的能力探测结果 |
+| `npm run validate:all` | 校验 `public/clips/` 下全部动作 |
 | `npm run validate:fixtures` | 跑 clip 校验器夹具：6 个坏的全被拒、合法的通过 |
+| `npm run test:clip` | 15 项播放与插值逻辑测试 |
+| `npm run gen:clips` | 重新生成全部程序化动作（产出即自检，不合格不写盘） |
 
 仓库根目录、不需要 `web/` 依赖的工具：
 
