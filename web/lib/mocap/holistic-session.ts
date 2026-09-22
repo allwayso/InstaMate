@@ -42,12 +42,55 @@ export interface HolisticSessionOptions {
   video: HTMLVideoElement;
   onFrame: (frame: HolisticFrame) => void;
   onError?: (err: Error) => void;
-  onStatus?: (status: SessionStatus, detail?: string) => void;
+  onStatus?: (status: SessionStatus, detail: string) => void;
   deviceId?: string;
 }
 
 /** 推理帧率的滑动窗口长度 */
 const FPS_WINDOW = 30;
+
+/**
+ * 官方连接拓扑。
+ *
+ * 为什么运行时从模块里取，而不是静态 import：
+ *   `import { POSE_CONNECTIONS } from '@mediapipe/holistic'` 会把 78 KB 的
+ *   holistic.js 提前拉进 bundle，而且它还会被 SSR 执行到（客户端组件也会先服务端渲染）。
+ *   session 反正要动态 import 这个包，顺手把常量取出来最划算，
+ *   也保证连接拓扑与模型版本一致（不自己手写索引表 —— 那种表写错一个数字
+ *   在画面上就是一条乱线，很难发现）。
+ */
+export interface HolisticConnections {
+  pose: ReadonlyArray<readonly [number, number]>;
+  hand: ReadonlyArray<readonly [number, number]>;
+  faceOval: ReadonlyArray<readonly [number, number]>;
+  faceLips: ReadonlyArray<readonly [number, number]>;
+  faceLeftEye: ReadonlyArray<readonly [number, number]>;
+  faceRightEye: ReadonlyArray<readonly [number, number]>;
+  faceLeftEyebrow: ReadonlyArray<readonly [number, number]>;
+  faceRightEyebrow: ReadonlyArray<readonly [number, number]>;
+}
+
+function asConnections(module: Record<string, unknown>): HolisticConnections | null {
+  const pick = (k: string) => {
+    const v = module[k];
+    return Array.isArray(v) ? (v as ReadonlyArray<readonly [number, number]>) : null;
+  };
+  const pose = pick('POSE_CONNECTIONS');
+  const hand = pick('HAND_CONNECTIONS');
+  const faceOval = pick('FACEMESH_FACE_OVAL');
+  if (!pose || !hand || !faceOval) return null;
+  return {
+    pose,
+    hand,
+    faceOval,
+    // 下面这些缺失时退化为空数组（少画几条线比崩掉好）
+    faceLips: pick('FACEMESH_LIPS') ?? [],
+    faceLeftEye: pick('FACEMESH_LEFT_EYE') ?? [],
+    faceRightEye: pick('FACEMESH_RIGHT_EYE') ?? [],
+    faceLeftEyebrow: pick('FACEMESH_LEFT_EYEBROW') ?? [],
+    faceRightEyebrow: pick('FACEMESH_RIGHT_EYEBROW') ?? [],
+  };
+}
 
 interface HolisticLike {
   setOptions(opts: Record<string, unknown>): void;
@@ -65,13 +108,14 @@ export class HolisticSession {
   private video: HTMLVideoElement;
   private onFrame: (f: HolisticFrame) => void;
   private onError: (e: Error) => void;
-  private onStatus: (s: SessionStatus, d?: string) => void;
+  private onStatus: (s: SessionStatus, d: string) => void;
   private deviceId?: string;
 
   private stream: MediaStream | null = null;
   private holistic: HolisticLike | null = null;
   private status: SessionStatus = 'idle';
   private detail = '';
+  private connections: HolisticConnections | null = null;
 
   /** 防竞态代号：只处理与当前代号一致的回调 */
   private generation = 0;
@@ -192,13 +236,14 @@ export class HolisticSession {
 
     this.setStatus('starting', '加载 Holistic 模型');
     try {
-      const mod = (await import('@mediapipe/holistic')) as unknown as {
+      const mod = (await import('@mediapipe/holistic')) as unknown as Record<string, unknown> & {
         Holistic: new (opts: { locateFile: (f: string) => string }) => HolisticLike;
       };
       if (gen !== this.generation) {
         this.releaseStream();
         return;
       }
+      this.connections = asConnections(mod);
       const holistic = new mod.Holistic({
         // ★ 恒定走本地，绝不落到 CDN（验收第 9 条：断网也要能跑）
         locateFile: (file: string) => `${VENDOR_URL_PATH}/${file}`,
@@ -344,6 +389,11 @@ export class HolisticSession {
 
   get usingVideoFrameCallback(): boolean {
     return this.loopKind === 'rvfc';
+  }
+
+  /** 官方连接拓扑（模型加载后才可用） */
+  get connectionsOrNull(): HolisticConnections | null {
+    return this.connections;
   }
 
   /** 给自动化测试用：当前活跃的 MediaStream 轨道数（应为 0 或 1） */
