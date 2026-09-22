@@ -123,6 +123,9 @@ export default function MotionLibraryPage() {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [clipSnapshot, setClipSnapshot] = useState({ state: 'idle', time: 0, duration: 0 });
   const [skeleton, setSkeleton] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [probeLabel, setProbeLabel] = useState('抬右手');
+  const [probeResult, setProbeResult] = useState<ProbeSummary | null>(null);
 
   // ── 管线对象（用 ref：每帧都要访问，不能走 state）────────────────────
   const solverRef = useRef<MocapSolver | null>(null);
@@ -142,6 +145,22 @@ export default function MotionLibraryPage() {
    * 只存内存，随保存请求发出；体积大（10 秒可能 5–10 MB），不落 localStorage。
    */
   const rawFramesRef = useRef<MocapRawFrame[]>([]);
+
+  /**
+   * 标定探针。
+   *
+   * 目的：把"哪个分量在动、往哪个方向动"从**观察**变成**数字**。
+   * 轴向映射不能靠推导（Kalidokit 的 rig 空间里有左右反向、非线性耦合、clamp），
+   * 但也不该靠"看着像反了"来猜 —— 让用户做一个动作、把范围打出来，
+   * 照着数字改常量，一次到位。
+   *
+   * 记录的是**重定向前**的原始输出（Kalidokit 的 kp / kf），
+   * 因为要判断的正是"原始值到目标骨骼"这一步。
+   */
+  const probeRef = useRef<{
+    startedAt: number;
+    samples: Record<string, Record<string, number[]>>;
+  } | null>(null);
   const swapRef = useRef(swap);
   swapRef.current = swap;
 
@@ -237,6 +256,26 @@ export default function MotionLibraryPage() {
       const imageSize = { width: video.videoWidth || 640, height: video.videoHeight || 480 };
       const kp = solver?.solvePose(frame.poseLandmarks, frame.poseWorldLandmarks, { imageSize }) ?? null;
       const kf = solver?.solveFace(frame.faceLandmarks, { imageSize }) ?? null;
+
+      // 1.5) 标定探针采样（记录**重定向前**的原始输出）
+      const probe = probeRef.current;
+      if (probe) {
+        const push = (src: Record<string, unknown> | null | undefined, prefix = '') => {
+          if (!src) return;
+          for (const [k, v] of Object.entries(src)) {
+            if (!v || typeof v !== 'object') continue;
+            const o = v as Record<string, unknown>;
+            if (typeof o.x !== 'number' || typeof o.y !== 'number' || typeof o.z !== 'number') continue;
+            const key = prefix + k;
+            const slot = (probe.samples[key] ??= { x: [], y: [], z: [] });
+            slot.x.push(o.x as number);
+            slot.y.push(o.y as number);
+            slot.z.push(o.z as number);
+          }
+        };
+        push(kp as Record<string, unknown> | null);
+        push(kf as Record<string, unknown> | null, 'Face.');
+      }
 
       // 2) 重定向 → 规范化姿态（10 根骨骼）
       const rt = retarget({ pose: kp, face: kf }, swapRef.current);
@@ -596,6 +635,36 @@ export default function MotionLibraryPage() {
       },
       applyTrim,
       playEntry: handlePlayEntry,
+      // ── 标定探针 ──────────────────────────────────────────────────────
+      startProbe: () => {
+        probeRef.current = { startedAt: performance.now(), samples: {} };
+        return '探针已开始。现在做一个动作（例如抬右手 → 放下，重复 3 次），然后调用 __mocapDebug.stopProbe()';
+      },
+      stopProbe: () => {
+        const p = probeRef.current;
+        probeRef.current = null;
+        if (!p) return null;
+        const durationMs = performance.now() - p.startedAt;
+        const bones: Record<string, Record<string, { min: number; max: number; range: number; first: number; last: number }>> = {};
+        for (const [bone, axes] of Object.entries(p.samples)) {
+          if (!axes.x.length) continue;
+          const row: Record<string, { min: number; max: number; range: number; first: number; last: number }> = {};
+          for (const [ax, vals] of Object.entries(axes)) {
+            const min = Math.min(...vals);
+            const max = Math.max(...vals);
+            row[ax] = {
+              min: +min.toFixed(4),
+              max: +max.toFixed(4),
+              range: +(max - min).toFixed(4),
+              first: +vals[0].toFixed(4),
+              last: +vals[vals.length - 1].toFixed(4),
+            };
+          }
+          bones[bone] = row;
+        }
+        const frames = Math.max(0, ...Object.values(p.samples).map((a) => a.x.length));
+        return { durationMs: +durationMs.toFixed(0), frames, bones };
+      },
     };
   }, [calibration, recOutcome, built, trim, entries, base, applyTrim, handlePlayEntry]);
 
@@ -745,10 +814,53 @@ export default function MotionLibraryPage() {
             </label>
             {swap !== DEFAULT_SWAP && (
               <span className="hint">
-                已偏离默认值，切换后需重新校准
+                已偏离默认值（代码里的实测值是 {String(DEFAULT_SWAP)}）
               </span>
             )}
           </div>
+
+          <div className="probe-row">
+            <label>
+              标定探针
+              <select
+                value={probeLabel}
+                onChange={(e) => setProbeLabel(e.target.value)}
+                disabled={probing}
+              >
+                {['抬右手', '抬左手', '屈右肘', '屈左肘', '头向自身左转', '头向自身右转', '右手前伸'].map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className={probing ? 'danger' : ''}
+              disabled={state !== 'detecting' && state !== 'ready' && state !== 'calibrating'}
+              onClick={() => {
+                if (!probing) {
+                  (window as unknown as { __mocapDebug?: { startProbe: () => string } }).__mocapDebug?.startProbe();
+                  setProbeResult(null);
+                  setProbing(true);
+                  setNotice({ kind: 'info', text: `探针已开始：慢速做「${probeLabel}」并重复 3 次，做完点「结束并输出」` });
+                } else {
+                  const r = (
+                    window as unknown as { __mocapDebug?: { stopProbe: () => ProbeSummary | null } }
+                  ).__mocapDebug?.stopProbe();
+                  setProbing(false);
+                  setProbeResult(r ? { ...r, label: probeLabel } : null);
+                  setNotice(null);
+                }
+              }}
+            >
+              {probing ? '结束并输出' : '开始'}
+            </button>
+            {probing && <span className="hint">采样中…慢速做动作，重复 3 次</span>}
+            {!probing && <span className="hint">用它把"哪个分量在动"变成数字，不用靠看</span>}
+          </div>
+
+          {probeResult && <ProbeTable result={probeResult} />}
 
           <div className="record-box">
             <button
@@ -893,6 +1005,87 @@ export default function MotionLibraryPage() {
         </footer>
       )}
     </main>
+  );
+}
+
+interface ProbeSummary {
+  label?: string;
+  durationMs: number;
+  frames: number;
+  bones: Record<string, Record<string, { min: number; max: number; range: number; first: number; last: number }>>;
+}
+
+/**
+ * 探针结果表。
+ *
+ * 按**变化范围**降序排 —— 主导分量排在最上面，一眼就能看出
+ * "这个动作主要由哪个分量承载、往哪个方向变"。
+ * 这正是标定轴映射需要的信息，而它不该靠肉眼猜。
+ */
+function ProbeTable({ result }: { result: ProbeSummary }) {
+  const rows = Object.entries(result.bones).flatMap(([bone, axes]) =>
+    Object.entries(axes).map(([ax, s]) => ({ key: `${bone}.${ax}`, bone, ax, ...s })),
+  );
+  rows.sort((a, b) => b.range - a.range);
+  const top = rows.filter((r) => r.range > 0.02);
+
+  const copy = () => {
+    const text = rows
+      .filter((r) => r.range > 0.01)
+      .map((r) => `${r.bone}.${r.ax}  范围 ${r.range.toFixed(4)}  ${r.first.toFixed(4)} → ${r.last.toFixed(4)}  [${r.min.toFixed(4)}, ${r.max.toFixed(4)}]`)
+      .join(String.fromCharCode(10));
+    navigator.clipboard?.writeText(`动作：${result.label}${String.fromCharCode(10)}${text}`);
+  };
+
+  return (
+    <div className="probe-result">
+      <div className="probe-head">
+        <strong>探针结果：{result.label}</strong>
+        <span className="hint">
+          {result.frames} 帧 / {(result.durationMs / 1000).toFixed(1)}s｜按变化范围排序
+        </span>
+        <button type="button" onClick={copy}>
+          复制
+        </button>
+      </div>
+      <p className="hint">
+        只看范围 &gt; 0.02 的行。带 ★ 的是主导分量 —— 它决定了这个动作该落到哪根轴、什么符号。
+      </p>
+      <table className="probe-table">
+        <thead>
+          <tr>
+            <th>来源分量</th>
+            <th>起始</th>
+            <th>最小</th>
+            <th>最大</th>
+            <th>变化范围</th>
+          </tr>
+        </thead>
+        <tbody>
+          {top.map((r, i) => (
+            <tr key={r.key} className={i === 0 ? 'is-dominant' : ''}>
+              <td className="mono">
+                {i === 0 ? '★ ' : ''}
+                {r.key}
+              </td>
+              <td>{r.first.toFixed(4)}</td>
+              <td>{r.min.toFixed(4)}</td>
+              <td>{r.max.toFixed(4)}</td>
+              <td>
+                <strong>{r.range.toFixed(4)}</strong>
+              </td>
+            </tr>
+          ))}
+          {top.length === 0 && (
+            <tr>
+              <td colSpan={5} className="motion-empty">
+                几乎没有变化 —— 动作没被识别到，或者做得太小
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

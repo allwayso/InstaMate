@@ -193,6 +193,23 @@ const ARM_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
 const ARM_REST_WEIGHT = 1;
 
 /**
+ * ★ 需标定的常量 ③：头颈与脊柱的轴映射。
+ *
+ * 之前偷懒让它们共用 ARM_AXES —— 那是不对的：手臂的 rig 空间来自 `rigArm()`
+ * （里面有 invert / 非线性耦合 / clamp），而头颈来自 `FaceSolver.calcHead()`、
+ * 脊柱来自 `calcHips()`，**三套完全不同的推导**，不可能共用同一组轴符号。
+ *
+ * 实测反馈：抬臂方向已对，但**转头方向是反的** —— 正是这个偷懒的后果。
+ * 现在它们各自独立，探针一出结果只改这里。
+ *
+ * 待填（用标定探针「头向自身左转」那一条）：
+ *   G1 已实测我们的约定：头向角色自身左 = 绕 Y 正方向
+ *   需要的只是确认 Kalidokit 的 Face.head 哪个分量承载偏航、符号如何
+ */
+const HEAD_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
+const SPINE_AXES: AxisTriple = [ax('x', 1), ax('y', 1), ax('z', -1)];
+
+/**
  * 骨骼规则表。
  *
  * 脊柱拆两段（spine 35% / chest 65%）、头颈拆两段（neck 35% / head 65%）——
@@ -201,10 +218,10 @@ const ARM_REST_WEIGHT = 1;
  * Kalidokit 没有稳定的肩骨输出，硬驱动会抖。
  */
 export const RETARGET_RULES: Readonly<Record<RetargetBone, BoneRule>> = {
-  spine: { from: 'Spine', weight: 0.35, axes: ARM_AXES },
-  chest: { from: 'Spine', weight: 0.65, axes: ARM_AXES },
-  neck: { from: 'Face.head', weight: 0.35, axes: ARM_AXES },
-  head: { from: 'Face.head', weight: 0.65, axes: ARM_AXES },
+  spine: { from: 'Spine', weight: 0.35, axes: SPINE_AXES },
+  chest: { from: 'Spine', weight: 0.65, axes: SPINE_AXES },
+  neck: { from: 'Face.head', weight: 0.35, axes: HEAD_AXES },
+  head: { from: 'Face.head', weight: 0.65, axes: HEAD_AXES },
   rightUpperArm: { from: 'RightUpperArm', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
   rightLowerArm: { from: 'RightLowerArm', weight: ARM_REST_WEIGHT, axes: ARM_AXES },
   rightHand: { from: 'RightHand', weight: ARM_REST_WEIGHT, axes: ARM_AXES },

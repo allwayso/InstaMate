@@ -586,3 +586,27 @@ code { background: #0f1319; padding: 1px 4px; border-radius: 3px; font-size: 12p
 .camera-dataflow .flow-missing { color: #ff6b6b; font-weight: 600; cursor: help; }
 .camera-dataflow .mono { font-family: ui-monospace, monospace; color: #737b8a; }
 .camera-dataflow .flow-empty { color: #737b8a; cursor: help; }
+
+/* 标定探针按钮 */
+.probe-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #2a3140;
+}
+.probe-row .hint { max-width: 46ch; }
+
+.probe-result { margin: 10px 0 12px; }
+.probe-head { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
+.probe-head button { margin-left: auto; }
+.probe-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+.probe-table th, .probe-table td {
+  text-align: right; padding: 3px 8px; border-bottom: 1px solid #232936;
+}
+.probe-table th:first-child, .probe-table td:first-child { text-align: left; }
+.probe-table th { color: #9aa3b2; }
+.probe-table tr.is-dominant { background: #1e2a3a; }
+.probe-table .mono { font-family: ui-monospace, monospace; }
