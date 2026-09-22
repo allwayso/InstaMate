@@ -6,3 +6,13 @@
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
 .pdfbuild/t*.html
+
+# VRM 资产：体积大 + 有许可约束，用 tools/fetch-assets.sh 拉取，不进仓库
+*.vrm
+
+# 依赖与构建产物（web/.gitignore 已覆盖 web/ 内，这里是根目录安全网）
+node_modules/
+.next/
+
+# G0 本地证据（截图等），不入库
+.g0/

@@ -1,0 +1,88 @@
+{
+  "asset": "sample.vrm",
+  "purpose": "engineering-sample",
+  "sha256": "624d0d554bc205bbdc33e22a68a2c3c20edebb3e573011ead8878a65e5329b23",
+  "bytes": 10917800,
+  "source": "https://github.com/vrm-c/vrm-specification (samples/Seed-san/vrm/Seed-san.vrm)",
+  "generatedAt": "2026-09-22 06:21:41",
+  "vrm": {
+    "specVersion": "1.0",
+    "exporter": null,
+    "exporterNote": "GLB asset.generator 为空，导出器版本未声明",
+    "glTfVersion": 2,
+    "extensionsUsed": [
+      "VRMC_springBone",
+      "VRMC_vrm",
+      "KHR_materials_unlit",
+      "VRMC_materials_mtoon",
+      "KHR_texture_transform",
+      "KHR_materials_emissive_strength",
+      "VRMC_node_constraint"
+    ]
+  },
+  "rig": {
+    "boneCount": 51,
+    "specBoneCount": 55,
+    "missingBones": [
+      "upperChest",
+      "leftEye",
+      "rightEye",
+      "jaw"
+    ],
+    "hipsWorldY": 0.7956,
+    "headWorldY": 1.332,
+    "heightM": 1.58,
+    "heightNote": "G0 实测：整模型 bounding box 高度（含头发），2026-09-22 于调试页读出；供相机取景与展示缩放的基准",
+    "g0MeasuredAt": "2026-09-22"
+  },
+  "capabilities": {
+    "expressionsPreset": [
+      "aa",
+      "angry",
+      "blink",
+      "blinkLeft",
+      "blinkRight",
+      "ee",
+      "happy",
+      "ih",
+      "lookDown",
+      "lookLeft",
+      "lookRight",
+      "lookUp",
+      "neutral",
+      "oh",
+      "ou",
+      "relaxed",
+      "sad",
+      "surprised"
+    ],
+    "expressionsPresetCount": 18,
+    "expressionsCustom": [],
+    "springBoneGroups": 9,
+    "springBoneColliders": 8,
+    "lookAtType": "expression",
+    "meshes": 5,
+    "materials": 17,
+    "nodes": 147,
+    "springBoneNote": "springBoneGroups=规范级 springs 条数；运行时 three-vrm 另有 joint 数（19）与 collider 数（8），三者口径不同"
+  },
+  "license": {
+    "licenseUrl": "https://vrm.dev/licenses/1.0/",
+    "creditNotation": "required",
+    "copyrightInformation": "VirtualCast, Inc.",
+    "authors": [
+      "VirtualCast, Inc."
+    ],
+    "avatarPermission": "everyone",
+    "commercialUsage": "corporation",
+    "allowRedistribution": true,
+    "modification": "allowModificationRedistribution",
+    "obligation": "creditNotation=required —— 演示材料出现该角色必须署名 VirtualCast, Inc."
+  },
+  "knownIssues": [
+    "无 upperChest：脊柱链为 hips→spine→chest→neck→head 共 5 段，相关代码路径必须判空",
+    "无 leftEye/rightEye/jaw：lookAt 只能走 expression 型，眼球不由骨骼驱动",
+    "lookAt.type=expression：lookAtType 必须由运行时能力探测读取，禁止在代码里写死",
+    "本资产仅供工程验证（G0/G1/G2），不是最终演示角色；正式角色是 companion.vrm"
+  ]
+}

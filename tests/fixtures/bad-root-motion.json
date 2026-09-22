@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "rigProfile": "vrm-normalized-v1",
+  "name": "bad-root-motion",
+  "space": "normalized-local",
+  "rotationMode": "absolute",
+  "quaternionOrder": "xyzw",
+  "fps": 30,
+  "frameCount": 2,
+  "duration": 0.03333333333333333,
+  "loop": false,
+  "rootMotion": "free",
+  "mask": [
+    "rightUpperArm"
+  ],
+  "bones": {
+    "rightUpperArm": [
+      [
+        0,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        1
+      ]
+    ]
+  }
+}

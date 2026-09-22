@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "rigProfile": "vrm-normalized-v1",
+  "name": "bad-bone-name",
+  "space": "normalized-local",
+  "rotationMode": "absolute",
+  "quaternionOrder": "xyzw",
+  "fps": 30,
+  "frameCount": 2,
+  "duration": 0.03333333333333333,
+  "loop": false,
+  "rootMotion": "locked",
+  "mask": [
+    "J_Bip_C_Hips"
+  ],
+  "bones": {
+    "J_Bip_C_Hips": [
+      [
+        0,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        1
+      ]
+    ]
+  }
+}
