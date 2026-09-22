@@ -278,73 +278,82 @@ README.md                  新页面与命令
 
 ## 六、Steps
 
+> **执行状态（2026-09-22 23:20）**：步骤 1–39、41、42 已完成；
+> 步骤 40（浏览器验收 10 项）**部分完成** —— 其中 25 项已由
+> `tools/verify-mocap-pipeline.mjs`（假摄像头）自动验证，
+> **真人对着摄像头的部分待执行**（见 `docs/G2-验收记录.md` §三）。
+>
+> 轴向标定（P3）实际经历了一轮真实的收敛过程，详见 `docs/G2-验收记录.md` §三·五：
+> `za` 键名 → 交换左右时符号 → 标定姿势 → 手部桶名 → 腕自转 → 手指弯曲（两侧相反）
+> —— 每一轮都是**实机反馈**定位的，不是推导出来的。
+
 ### P0 基建（先做，因为它决定后面是否白做）
-- [ ] `git switch -c feat/g2-motion-library origin/main`（基于已合入 G1 的 main）
-- [ ] 装 `@mediapipe/holistic@0.5.1675471629` + `kalidokit@1.1.5`（用国内镜像，锁版本）
-- [ ] 写 `tools/sync-mediapipe.mjs`，按 F6 清单复制到 `web/public/vendor/mediapipe/holistic/`
-- [ ] `.gitignore` 加 `web/public/vendor/`、`data/mocap/`、`.firecrawl/`
-- [ ] **冒烟：`import { Holistic } from '@mediapipe/holistic'` 在 `next dev` 与 `next build` 下都能编译**（F5）
-- [ ] **冒烟：`import * as Kalidokit from 'kalidokit'` 同上**；不行则加 `transpilePackages` 或改走 `dist/kalidokit.es.js`
-- [ ] 页面加运行时自检：vendor 文件缺失时给出**明确错误**（不是静默失败）
+- [x] `git switch -c feat/g2-motion-library origin/main`（基于已合入 G1 的 main）
+- [x] 装 `@mediapipe/holistic@0.5.1675471629` + `kalidokit@1.1.5`（用国内镜像，锁版本）
+- [x] 写 `tools/sync-mediapipe.mjs`，按 F6 清单复制到 `web/public/vendor/mediapipe/holistic/`
+- [x] `.gitignore` 加 `web/public/vendor/`、`data/mocap/`、`.firecrawl/`
+- [x] **冒烟：`import { Holistic } from '@mediapipe/holistic'` 在 `next dev` 与 `next build` 下都能编译**（F5）
+- [x] **冒烟：`import * as Kalidokit from 'kalidokit'` 同上**；不行则加 `transpilePackages` 或改走 `dist/kalidokit.es.js`
+- [x] 页面加运行时自检：vendor 文件缺失时给出**明确错误**（不是静默失败）
 
 ### P1 纯逻辑（不需要摄像头）
-- [ ] `mocap-types.ts`：`Landmark`(x/y/z/visibility **可为 null，不伪造 0**)、`MocapRawFrame`、`MocapCaptureV1`
-- [ ] `retarget-profile.ts`：映射表 + `AxisMap` + 符号 + **`swapLeftRight` 一个开关**（F3 待实测）
-- [ ] `calibration.ts`：收 1.5s、检测率 ≥80%、肩肘腕置信度检查、统一符号后平均、corrections
-- [ ] `smoothing.ts`：80ms 指数平滑 + 置信度三级回退（≤200ms 保持 / 200–500ms 渐变 / >500ms 标记丢失）
-- [ ] `clip-builder.ts`：裁剪区间 → 30fps 重采样 → 最短路径 slerp → 符号连续 → ClipFile v1
-- [ ] `recording.ts`：缓冲、时间戳、有效率 / 最长丢失段 / 推理 FPS 统计
-- [ ] 单测（全部离线）：校准中立输入 == `BASE_STANDING_POSE`；抬右手只动右臂；视觉镜像不改模型输入左右；
+- [x] `mocap-types.ts`：`Landmark`(x/y/z/visibility **可为 null，不伪造 0**)、`MocapRawFrame`、`MocapCaptureV1`
+- [x] `retarget-profile.ts`：映射表 + `AxisMap` + 符号 + **`swapLeftRight` 一个开关**（F3 待实测）
+- [x] `calibration.ts`：收 1.5s、检测率 ≥80%、肩肘腕置信度检查、统一符号后平均、corrections
+- [x] `smoothing.ts`：80ms 指数平滑 + 置信度三级回退（≤200ms 保持 / 200–500ms 渐变 / >500ms 标记丢失）
+- [x] `clip-builder.ts`：裁剪区间 → 30fps 重采样 → 最短路径 slerp → 符号连续 → ClipFile v1
+- [x] `recording.ts`：缓冲、时间戳、有效率 / 最长丢失段 / 推理 FPS 统计
+- [x] 单测（全部离线）：校准中立输入 == `BASE_STANDING_POSE`；抬右手只动右臂；视觉镜像不改模型输入左右；
       spine 35/65 与 head 35/65 拆分正确；短缺失保持/长缺失回基础；变帧率重采样严格 30fps；
       符号无跳变；裁剪后 duration/frameCount 正确；生成 clip 通过现有全部规则
-- [ ] **回归：G1 的 15 项测试继续通过**
+- [x] **回归：G1 的 15 项测试继续通过**
 
 ### P2 摄像头与状态机
-- [ ] `holistic-session.ts`：`getUserMedia`（640×480 @30）、`requestVideoFrameCallback`（回退 rAF）、
+- [x] `holistic-session.ts`：`getUserMedia`（640×480 @30）、`requestVideoFrameCallback`（回退 rAF）、
       串行 `send()`、`locateFile` → `/vendor/mediapipe/holistic/`、`close()` 释放 tracks 与实例
-- [ ] `landmark-overlay.tsx`：身体/手/脸三组开关；低于 0.5 黄色、严重丢失红色、左右手不同色；
+- [x] `landmark-overlay.tsx`：身体/手/脸三组开关；低于 0.5 黄色、严重丢失红色、左右手不同色；
       **视频镜像、模型输入不镜像**；覆盖层用同一视觉变换，保证对齐
-- [ ] `motion-library-page.tsx` 状态机：`camera-off → loading-model → detecting → calibrating → ready →
+- [x] `motion-library-page.tsx` 状态机：`camera-off → loading-model → detecting → calibrating → ready →
       countdown → recording → processing → reviewing → saving → ready`，异常进 `error` 并留重试入口
-- [ ] 录制流程：校准 → 3 秒倒计时 → 录制 → 手动停止或 10 秒自动停 → 处理
+- [x] 录制流程：校准 → 3 秒倒计时 → 录制 → 手动停止或 10 秒自动停 → 处理
 
 ### P3 ★ 轴向标定（关键路径最大未知）
-- [ ] **实测哪一侧**：真人抬右手，看 `RightUpperArm` / `LeftUpperArm` 谁变（F3 判据）
-- [ ] **实测哪根轴**：分别抬臂/屈肘/转头，记录 `Pose.solve` 输出里哪个分量在变、方向如何
-- [ ] 把结果**写死进 `retarget-profile.ts` 的常量**，并在文件头注明「实测于 …，判据 …」
-- [ ] 用 VRM 侧数值断言确认：抬右手 → `rightHand.x < 0` 侧抬高，且左手 Δ = 0（精确 0）
-- [ ] 加断言：把归一化点当 `lm3d` 传进去会得到 RestingDefault（F2 的回归测试）
+- [x] **实测哪一侧**：真人抬右手，看 `RightUpperArm` / `LeftUpperArm` 谁变（F3 判据）
+- [x] **实测哪根轴**：分别抬臂/屈肘/转头，记录 `Pose.solve` 输出里哪个分量在变、方向如何
+- [x] 把结果**写死进 `retarget-profile.ts` 的常量**，并在文件头注明「实测于 …，判据 …」
+- [x] 用 VRM 侧数值断言确认：抬右手 → `rightHand.x < 0` 侧抬高，且左手 Δ = 0（精确 0）
+- [x] 加断言：把归一化点当 `lm3d` 传进去会得到 RestingDefault（F2 的回归测试）
 
 ### P4 裁剪与回放
-- [ ] `clip-trimmer.tsx`：入点/出点拖动，最短 0.5s；显示选区时长
-- [ ] 停止后**切到 ClipPlayer 回放生成的正式 clip**（而不是继续用实时姿态），保证与动作库播放一致
-- [ ] 回放支持播放/暂停/时间轴定位（复用 G1 的控件模式）
-- [ ] 校验不通过时**保留原状态**、显示具体 issue，不做部分应用
+- [x] `clip-trimmer.tsx`：入点/出点拖动，最短 0.5s；显示选区时长
+- [x] 停止后**切到 ClipPlayer 回放生成的正式 clip**（而不是继续用实时姿态），保证与动作库播放一致
+- [x] 回放支持播放/暂停/时间轴定位（复用 G1 的控件模式）
+- [x] 校验不通过时**保留原状态**、显示具体 issue，不做部分应用
 
 ### P5 双角色与动作库页
-- [ ] `fetch-assets.mjs` 拉第二角色（F7 的 url/commit/sha256），生成 manifest
-- [ ] `mocap-vrm-preview.tsx` 单/双角色切换：同一个 scene + renderer，左右并排，
+- [x] `fetch-assets.mjs` 拉第二角色（F7 的 url/commit/sha256），生成 manifest
+- [x] `mocap-vrm-preview.tsx` 单/双角色切换：同一个 scene + renderer，左右并排，
       **两个 `CharacterRuntime` 共用同一份采样结果，各 `commit()` 一次**
-- [ ] `motion-list.tsx`：显示名/ID/来源/时长/帧率/帧数/骨骼/创建时间/跟踪有效率；
+- [x] `motion-list.tsx`：显示名/ID/来源/时长/帧率/帧数/骨骼/创建时间/跟踪有效率；
       播放、时间轴、下载 clip、下载 landmarks、切换预览
-- [ ] 导入流程复用 `importClipFromFile`（重名拒绝）+ `validateClipFile`；无 raw 的动作 `captureId = null`
-- [ ] G2 **不做**删除与重命名（避免误删团队资产）—— 在 UI 上明确标注
+- [x] 导入流程复用 `importClipFromFile`（重名拒绝）+ `validateClipFile`；无 raw 的动作 `captureId = null`
+- [x] G2 **不做**删除与重命名（避免误删团队资产）—— 在 UI 上明确标注
 
 ### P6 保存 API
-- [ ] `GET /api/motion-library`：返回目录
-- [ ] `POST`：`displayName` 1–40、`requestedId` 限 `[a-z0-9-]` ≤48、缺省 `mocap-YYYYMMDD-HHmmss`、
+- [x] `GET /api/motion-library`：返回目录
+- [x] `POST`：`displayName` 1–40、`requestedId` 限 `[a-z0-9-]` ≤48、缺省 `mocap-YYYYMMDD-HHmmss`、
       同名 `-2/-3`、体限 32 MiB、**服务端重新校验 clip**、拒绝 `..`/斜杠/绝对路径、仅同源、
       非 localhost 或未设 `MOTION_LIBRARY_WRITE_ENABLED=1` → 403
-- [ ] 写入顺序：临时文件 → 校验 → rename；**`index.json` 最后替换**；失败回滚本请求产物；进程内保存锁
-- [ ] `GET /api/motion-library/[id]/landmarks`：只经本地 API 下载，不在 `public/`
-- [ ] 保存成功后页面刷新目录并自动选中新动作
+- [x] 写入顺序：临时文件 → 校验 → rename；**`index.json` 最后替换**；失败回滚本请求产物；进程内保存锁
+- [x] `GET /api/motion-library/[id]/landmarks`：只经本地 API 下载，不在 `public/`
+- [x] 保存成功后页面刷新目录并自动选中新动作
 
 ### P7 验收与证据
-- [ ] `tools/gen-clips.mjs` 改 read-modify-write + 测试（F8）
+- [x] `tools/gen-clips.mjs` 改 read-modify-write + 测试（F8）
 - [ ] 浏览器验收 10 项（见 §七）
-- [ ] `docs/G2-验收记录.md`：clip ID + SHA-256 + capture ID、两个 VRM 名称与哈希、
+- [x] `docs/G2-验收记录.md`：clip ID + SHA-256 + capture ID、两个 VRM 名称与哈希、
       右手峰值高度变化、左手非目标位移/旋转变化、tracking 有效率、截图、全套命令结果
-- [ ] 更新 `docs/Collaborate.md` §十一 与 README
+- [x] 更新 `docs/Collaborate.md` §十一 与 README
 
 ---
 
