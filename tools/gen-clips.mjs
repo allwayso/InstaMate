@@ -12,6 +12,7 @@
 //   node tools/gen-clips.mjs            # 生成到 web/public/clips/，并刷新 index.json
 //   node tools/gen-clips.mjs --check    # 只校验已存在的文件，不重写（CI 用）
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mergeCatalog, preserveNonGenerated } from '../web/lib/clip-catalog-merge.ts';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLIP_SPEC, validateClip } from '../web/lib/clip-spec.ts';
@@ -237,8 +238,40 @@ for (const def of CLIPS) {
 }
 
 if (!checkOnly && failed === 0) {
-  writeFileSync(join(OUT_DIR, 'index.json'), JSON.stringify({ clips: catalog }, null, 2) + '\n');
-  console.log(`\n动作目录已写入 web/public/clips/index.json（${catalog.length} 条）`);
+  // ── 目录是**读-改-写**，不是整体重写 ──────────────────────────────────
+  //
+  // 这个文件同时被两方写：本生成器，以及 G2 的保存 API（录入真人动作时）。
+  // 早期实现是整体重写，于是"录完动作再跑一次 gen:clips"会把录的动作从目录里抹掉 ——
+  // 文件还在磁盘上，但从目录里消失了，看起来像"动作丢了"。
+  // （实测复现过：塞一条 source:mocap 的条目，跑一次本脚本就没了。）
+  //
+  // 所以：只替换 source === "generated" 的条目，其它来源原样保留，
+  // 目录里与本生成器无关的字段也一律不动。
+  //
+  // 合并规则本身在 web/lib/clip-catalog-merge.ts（纯函数，有单测）。
+  const NL = String.fromCharCode(10);
+  const indexPath = join(OUT_DIR, "index.json");
+  let existing = null;
+  let preservedCount = 0;
+  if (existsSync(indexPath)) {
+    try {
+      existing = JSON.parse(readFileSync(indexPath, "utf8"));
+    } catch {
+      console.error(NL + "✗ 现有 index.json 不是合法 JSON，已中止以免覆盖整个动作库");
+      process.exit(1);
+    }
+    preservedCount = preserveNonGenerated(existing).length;
+  }
+  const nextIndex = mergeCatalog(existing, catalog);
+  writeFileSync(indexPath, JSON.stringify(nextIndex, null, 2) + NL);
+  console.log(
+    NL +
+      "动作目录已写入 web/public/clips/index.json（程序化 " +
+      catalog.length +
+      " 条" +
+      (preservedCount ? "，保留其它来源 " + preservedCount + " 条" : "") +
+      "）",
+  );
 }
 
 // 自检：基础站姿本身不能是参考姿态（normalized identity）
