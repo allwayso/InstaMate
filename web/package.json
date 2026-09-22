@@ -15,7 +15,8 @@
     "test": "node --test \"../tests/*.test.mjs\"",
     "gen:clips": "node ../tools/gen-clips.mjs",
     "sync:mediapipe": "node ../tools/sync-mediapipe.mjs",
-    "validate:all": "node ../tools/validate-clip.mjs --all public/clips"
+    "validate:all": "node ../tools/validate-clip.mjs --all public/clips",
+    "verify:pipeline": "node ../tools/verify-mocap-pipeline.mjs"
   },
   "dependencies": {
     "@mediapipe/holistic": "0.5.1675471629",

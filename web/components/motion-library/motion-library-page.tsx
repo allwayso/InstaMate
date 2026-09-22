@@ -46,6 +46,7 @@ import { buildClip, type BuildClipResult } from '@/lib/mocap/clip-builder';
 import { MOCAP_LIMITS, type MocapRawFrame } from '@/lib/mocap/mocap-types';
 import {
   createKalidokitSolver,
+  probeRestingDefaultGuard,
   type MocapSolver,
 } from '@/lib/mocap/kalidokit-solver';
 import { checkVendorFiles } from '@/lib/mocap/mediapipe-assets';
@@ -680,6 +681,12 @@ export default function MotionLibraryPage() {
        *   applyError 非空             → 骨骼写不进去（缺骨骼）
        */
       getPipeline: () => pipelineRef.current,
+      /**
+       * F2 回归：验证 Kalidokit 的离屏守卫仍在、且我们喂的是米制世界坐标。
+       * guardStillWorks=false 说明 kalidokit 改了行为（需要重新评估）；
+       * weAreSafe=false 说明我们喂错了坐标类型（手臂会完全不动）。
+       */
+      probeRestingDefaultGuard,
       /** 摄像头会话诊断：帧数为 0 说明帧循环根本没跑起来（rVFC 不触发等） */
       getCameraInfo: () => {
         const s = cameraRef.current?.session;

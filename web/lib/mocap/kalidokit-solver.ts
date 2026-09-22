@@ -152,6 +152,9 @@ export function extractPoseInputs(frame: MocapRawFrame): {
   };
 }
 
+/** 缓存已加载的模块，供下面的回归探针复用（避免二次 import） */
+let cachedModule: Record<string, unknown> | null = null;
+
 /** 用真实 kalidokit 创建求解器（只在浏览器里调用） */
 export async function createKalidokitSolver(): Promise<MocapSolver> {
   // ★ 动态 import：见文件头第 1 条。顶层 import 会让 Node 侧无法加载本模块。
@@ -170,6 +173,7 @@ export async function createKalidokitSolver(): Promise<MocapSolver> {
       solve: (lm: SolverVector[], side: string) => KalidokitHandLike | undefined;
     };
   };
+  cachedModule = mod as unknown as Record<string, unknown>;
 
   return {
     name: 'kalidokit',
@@ -247,4 +251,112 @@ export function asXYZ(v: XYZ | null | undefined): XYZ | null {
   if (!v) return null;
   const { x, y, z } = v as XYZ;
   return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? { x, y, z } : null;
+}
+
+
+/**
+ * F2 回归探针：验证 Kalidokit 的"离屏守卫"仍然存在，且我们喂的是米制世界坐标。
+ *
+ * 背景（这是 G2 阶段最贵的一个坑）：
+ *   `PoseSolver.solve` 内部有
+ *       rightHandOffscreen = lm3d[15].y > 0.1 || (lm3d[15].visibility ?? 0) < 0.23 || ...
+ *   其中 `> 0.1` 是**米**语义的阈值。如果误把归一化 [0,1] 的关键点当 lm3d 传进去，
+ *   `0.76 > 0.1` 恒为真 → 整条手臂被乘 0 并写成 `RestingDefault`
+ *   （RightUpperArm.z = −1.25），表现成"对输入毫无反应"，
+ *   极易误判成 kalidokit 坏了。
+ *
+ * 为什么做成运行时探针而不是单测：kalidokit 在 Node 里加载不了（见文件头第 1 条），
+ * 所以这条断言只能在浏览器里跑。
+ *
+ * @returns null 表示模块还没加载（先启动摄像头或等页面初始化完）
+ */
+export function probeRestingDefaultGuard(): {
+  restingDefaultZ: number;
+  normalizedInputZ: number;
+  meterInputZ: number;
+  guardStillWorks: boolean;
+  weAreSafe: boolean;
+} | null {
+  const mod = cachedModule as
+    | {
+        Pose?: { solve: (a: SolverVector[], b: SolverVector[], o: Record<string, unknown>) => { RightUpperArm?: { z?: number } } | undefined };
+        Utils?: { RestingDefault?: { Pose?: { RightUpperArm?: { z?: number } } } };
+      }
+    | null;
+  if (!mod?.Pose?.solve) return null;
+
+  // 归一化的 33 点（x,y ∈ [0,1]）—— 手腕 y = 0.76 > 0.1
+  const mkNormalized = () => {
+    const a: SolverVector[] = [];
+    for (let i = 0; i < 33; i++) a.push({ x: 0.5, y: 0.5, z: 0, visibility: 1 });
+    a[11] = { x: 0.62, y: 0.42, z: 0, visibility: 1 };
+    a[12] = { x: 0.38, y: 0.42, z: 0, visibility: 1 };
+    a[13] = { x: 0.70, y: 0.60, z: 0, visibility: 1 };
+    a[14] = { x: 0.30, y: 0.60, z: 0, visibility: 1 };
+    a[15] = { x: 0.72, y: 0.76, z: 0, visibility: 1 };
+    a[16] = { x: 0.28, y: 0.76, z: 0, visibility: 1 };
+    for (const i of [17, 19]) a[i] = { x: 0.72, y: 0.76, z: 0, visibility: 1 };
+    for (const i of [18, 20]) a[i] = { x: 0.28, y: 0.76, z: 0, visibility: 1 };
+    a[23] = { x: 0.58, y: 0.75, z: 0, visibility: 1 };
+    a[24] = { x: 0.42, y: 0.75, z: 0, visibility: 1 };
+    return a;
+  };
+  /**
+   * 米制世界坐标。
+   *
+   * ★ 必须写**真实的人体尺寸**，不能用"把归一化坐标线性缩放"来造 ——
+   *   那样会把手腕放到髋下 0.31m（`(0.76−0.5)*1.2 = +0.312`），
+   *   而验收守卫判的是 `lm3d[15].y > 0.1`（腕比髋低 10cm 以上即视为垂在手边），
+   *   于是"合成数据"本身就该被守卫拦下 —— 那是数据不真实，不是代码有问题。
+   *   （第一次写这个探针就是这么栽的。）
+   *
+   * 真实站立姿态（原点在髋中心，y 向下为负）：
+   *   肩 ≈ −0.50m，肘 ≈ −0.25m，腕 ≈ −0.03m，髋 = 0
+   */
+  const mkMeter = () => {
+    const a: SolverVector[] = [];
+    for (let i = 0; i < 33; i++) a.push({ x: 0, y: 0, z: 0, visibility: 1 });
+    const set = (i: number, x: number, y: number) => {
+      a[i] = { x, y, z: 0, visibility: 1 };
+    };
+    // 肩 11=左 12=右（世界 x：+ 为角色自身右？此处只需量级真实，方向不影响守卫判定）
+    set(11, 0.18, -0.5);
+    set(12, -0.18, -0.5);
+    set(13, 0.21, -0.25);
+    set(14, -0.21, -0.25);
+    set(15, 0.22, -0.03); // 腕：比髋**高** 3cm —— 正是"手垂在身侧"的真实位置
+    set(16, -0.22, -0.03);
+    set(17, 0.22, -0.02);
+    set(18, -0.22, -0.02);
+    set(19, 0.22, -0.02);
+    set(20, -0.22, -0.02);
+    set(21, 0.20, -0.02);
+    set(22, -0.20, -0.02);
+    set(23, 0.10, 0); // 髋
+    set(24, -0.10, 0);
+    set(25, 0.10, 0.45); // 膝
+    set(26, -0.10, 0.45);
+    set(27, 0.10, 0.85); // 踝
+    set(28, -0.10, 0.85);
+    return a;
+  };
+
+  const opts = { runtime: 'mediapipe' as const, imageSize: { width: 640, height: 480 }, enableLegs: false };
+  const restZ = mod.Utils?.RestingDefault?.Pose?.RightUpperArm?.z ?? -1.25;
+
+  const norm = mkNormalized();
+  const meter = mkMeter();
+  const zNorm = mod.Pose.solve(norm, norm, opts)?.RightUpperArm?.z ?? NaN;
+  const zMeter = mod.Pose.solve(meter, norm, opts)?.RightUpperArm?.z ?? NaN;
+
+  const guardStillWorks = Math.abs(zNorm - restZ) < 1e-9;
+  return {
+    restingDefaultZ: restZ,
+    normalizedInputZ: zNorm,
+    meterInputZ: zMeter,
+    // 守卫仍在：喂归一化坐标会被打回 RestingDefault
+    guardStillWorks,
+    // 我们安全：喂米制坐标不会被打回
+    weAreSafe: Number.isFinite(zMeter) && Math.abs(zMeter - restZ) > 1e-6,
+  };
 }
