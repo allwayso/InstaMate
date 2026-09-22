@@ -172,6 +172,8 @@ function toManifest(r, { generatedAt, source }) {
       '无 leftEye/rightEye/jaw：lookAt 只能走 expression 型，眼球不由骨骼驱动',
       'lookAt.type=expression：lookAtType 必须由运行时能力探测读取，禁止在代码里写死',
       '本资产仅供工程验证（G0/G1/G2），不是最终演示角色；正式角色是 companion.vrm',
+      '自带一个名为 robo_arm 的道具网格（独立根节点，不挂在人形骨架下）——它在所有姿态里都不动，' +
+        '不是骨骼变形失败。人工验收"网格随骨骼变形"时应忽略它',
     ],
   };
 }
