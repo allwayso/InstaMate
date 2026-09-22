@@ -287,3 +287,288 @@ main {
   margin: 0;
   word-break: break-word;
 }
+
+/* ── G2 · 动作录入与动作库 ────────────────────────────────────────────── */
+
+.mocap-page {
+  min-height: 100vh;
+  padding: 16px 18px 28px;
+  background: #12151b;
+  color: #e6e8ec;
+  font-size: 13px;
+}
+
+.mocap-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.mocap-header h1 { font-size: 17px; margin: 0; }
+.mocap-header nav a { color: #7cc4ff; text-decoration: none; }
+.mocap-header nav a:hover { text-decoration: underline; }
+
+.state-badge {
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #232936;
+  border: 1px solid #333b4a;
+  font-size: 12px;
+}
+.state-badge.state-recording { background: #4a1f22; border-color: #7a2b31; color: #ffb3b8; }
+.state-badge.state-calibrating { background: #3c3418; border-color: #6d5c22; color: #ffe08a; }
+.state-badge.state-ready { background: #1d3a2a; border-color: #2c5c42; color: #9be8bd; }
+.state-badge.state-error { background: #4a1f22; border-color: #7a2b31; color: #ffb3b8; }
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: 8px 0;
+  line-height: 1.6;
+  border: 1px solid #333b4a;
+  background: #1a1f29;
+}
+.banner.warn { border-color: #6d5c22; background: #2a2415; }
+.banner.error { border-color: #7a2b31; background: #2b1518; }
+.banner.info { border-color: #2c5c42; background: #14251c; }
+.banner pre { margin: 4px 0 0; white-space: pre-wrap; font-size: 12px; }
+.banner button {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid #4a5261;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0 6px;
+}
+
+.mocap-grid {
+  display: grid;
+  grid-template-columns: 680px minmax(360px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.mocap-grid .library-panel { grid-column: 1 / -1; }
+
+.panel {
+  background: #171b23;
+  border: 1px solid #262c38;
+  border-radius: 8px;
+  padding: 12px;
+}
+.panel h2 { margin: 0 0 10px; font-size: 14px; color: #cfd4dd; }
+.panel h3 { margin: 12px 0 6px; font-size: 13px; color: #b9c0cc; }
+
+/* 摄像头 */
+.camera-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.camera-device { display: flex; align-items: center; gap: 5px; }
+.camera-layers { display: flex; gap: 10px; margin-left: auto; }
+.camera-layers label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+
+.camera-stage {
+  position: relative;
+  background: #0c0f14;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 0 auto;
+}
+.camera-video { display: block; object-fit: cover; }
+.camera-video.is-hidden { visibility: hidden; position: absolute; }
+.camera-overlay,
+.mocap-overlay { position: absolute; inset: 0; pointer-events: none; }
+.camera-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #737b8a;
+}
+.camera-placeholder .hint { font-size: 12px; }
+
+.camera-status {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.camera-status .badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #232936;
+  font-size: 12px;
+}
+.camera-status .badge.status-running { background: #1d3a2a; color: #9be8bd; }
+.camera-status .badge.status-error { background: #4a1f22; color: #ffb3b8; }
+
+.camera-legend { display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; font-size: 12px; }
+.camera-legend span { display: flex; align-items: center; gap: 4px; }
+.camera-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.camera-legend i:last-of-type { border-radius: 50%; }
+
+.camera-error {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #7a2b31;
+  background: #2b1518;
+}
+.camera-error pre { margin: 4px 0 0; white-space: pre-wrap; font-size: 12px; }
+
+/* VRM 预览 */
+.preview-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.preview-toolbar label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.mocap-preview-mount {
+  width: 100%;
+  height: 420px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0c0f14;
+}
+.preview-status {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9aa3b2;
+  flex-wrap: wrap;
+}
+
+/* 录制流程 */
+.calibration-box,
+.record-box { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.calibration-box progress { width: 140px; }
+.calibration-box .ok { color: #9be8bd; }
+.calibration-box .bad { color: #ffb3b8; }
+.swap-toggle { display: flex; align-items: center; gap: 4px; margin-left: auto; cursor: pointer; }
+
+.countdown { font-size: 26px; font-weight: 700; color: #ffe08a; margin-left: 8px; }
+.rec-live { display: flex; gap: 12px; align-items: center; color: #ffb3b8; }
+
+.quality-box ul,
+.build-box ul { margin: 4px 0; padding-left: 18px; line-height: 1.7; }
+
+/* 动作库 */
+.motion-list-head { display: flex; gap: 8px; margin-bottom: 8px; }
+.motion-list-head input[type='search'] { flex: 1; }
+.motion-list-note { color: #8a93a3; font-size: 12px; margin: 0 0 8px; }
+.motion-list-scroll { max-height: 320px; overflow: auto; }
+.motion-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.motion-table th,
+.motion-table td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid #232936;
+  white-space: nowrap;
+}
+.motion-table th { position: sticky; top: 0; background: #171b23; color: #9aa3b2; }
+.motion-table tbody tr { cursor: pointer; }
+.motion-table tbody tr:hover { background: #1c222c; }
+.motion-table tbody tr.is-selected { background: #1e2a3a; }
+.motion-table tbody tr.is-playing { box-shadow: inset 3px 0 0 #4dabf7; }
+.motion-table .mono { font-family: ui-monospace, monospace; }
+.motion-table .small { font-size: 11px; color: #8a93a3; }
+.motion-actions { display: flex; gap: 4px; }
+.motion-empty { text-align: center; color: #737b8a; padding: 18px; }
+
+/* 底部：裁剪与保存 */
+.mocap-footer {
+  margin-top: 14px;
+  padding: 12px;
+  background: #171b23;
+  border: 1px solid #262c38;
+  border-radius: 8px;
+}
+.trimmer-head {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #9aa3b2;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.trimmer-hint { color: #6d7684; }
+.trimmer-track {
+  position: relative;
+  height: 34px;
+  background: #0f1319;
+  border: 1px solid #2a3140;
+  border-radius: 6px;
+  touch-action: none;
+}
+.trimmer-selection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(77, 171, 247, 0.22);
+  border-left: 1px solid #4dabf7;
+  border-right: 1px solid #4dabf7;
+  cursor: grab;
+}
+.trimmer-handle {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 12px;
+  margin-left: -6px;
+  background: #4dabf7;
+  border-radius: 3px;
+  cursor: ew-resize;
+}
+.trimmer-handle-out { background: #ff922b; }
+.trimmer-track.is-dragging { cursor: grabbing; }
+.trimmer-nudges { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.trimmer.is-disabled { opacity: 0.55; pointer-events: none; }
+
+.save-row { display: flex; gap: 10px; align-items: flex-end; margin-top: 12px; flex-wrap: wrap; }
+.save-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #9aa3b2; }
+.save-row input[type='text'] { min-width: 220px; }
+
+button {
+  background: #232936;
+  border: 1px solid #333b4a;
+  color: #e6e8ec;
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+button:hover:not(:disabled) { background: #2b3342; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: #1b4f7a; border-color: #2a6da3; }
+button.primary:hover:not(:disabled) { background: #215f92; }
+button.danger { background: #6a2229; border-color: #8d2e37; }
+button.danger:hover:not(:disabled) { background: #7d282f; }
+
+input[type='text'],
+input[type='search'],
+select {
+  background: #0f1319;
+  border: 1px solid #2a3140;
+  color: #e6e8ec;
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+code { background: #0f1319; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.hint { color: #737b8a; font-size: 12px; }
