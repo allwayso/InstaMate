@@ -25,9 +25,10 @@
 │  │  ├─ contracts.ts        ★ 三份接口契约（唯一真相源）
 │  │  ├─ human-bones-vrm1.json  VRM 1.0 规范 55 根骨骼冻结表
 │  │  └─ vrm-character.ts    VRM 加载器 + 运行时能力探测
-│  └─ public/avatars/        VRM 资产（不进 git，用 tools/fetch-assets.sh 拉取）
+│  └─ public/avatars/        VRM 资产（不进 git，用 tools/fetch-assets.mjs 拉取）
 ├─ tools/                    命令行工具
-│  ├─ fetch-assets.sh        拉取示例 VRM 并校验 sha256
+│  ├─ fetch-assets.mjs       拉取示例 VRM（多镜像回退 + sha256 校验）
+│  ├─ fetch-assets.sh        同上，bash 薄封装
 │  ├─ inspect-vrm.mjs        读取 .vrm 的骨骼/表情/弹簧骨/lookAt 能力
 │  ├─ validate-clip.mjs      动作文件（clip v1）校验器
 │  └─ dev-browser.sh         无头浏览器进程管家（仅 Windows）
@@ -40,7 +41,8 @@
 
 ## 启动方式
 
-**前置**：Node.js **≥ 20.9**（Next.js 16 的要求；推荐 24.x）、npm、bash 或 Git Bash。
+**前置**：Node.js **≥ 20.9**（Next.js 16 的要求；推荐 24.x）与 npm。
+拉资产已改用 Node 实现，**不再需要 bash / curl**。
 
 ```bash
 # HTTPS（推荐，队友机器不需要配 SSH key）
@@ -50,7 +52,7 @@ git clone -b feat/p0-static-vrm-render git@github.com:allwayso/InstaMate.git
 cd InstaMate
 
 # 1) 拉示例 VRM 资产（约 11 MB，不进 git，必须这一步）
-bash tools/fetch-assets.sh
+node tools/fetch-assets.mjs
 
 # 2) 装依赖（用 ci 而不是 install：保证版本与 lockfile 完全一致）
 cd web && npm ci
@@ -96,10 +98,44 @@ npm run dev
 
 | 命令 | 作用 |
 |---|---|
-| `bash tools/fetch-assets.sh [--force]` | 拉取示例 VRM 并按 sha256 校验 |
+| `node tools/fetch-assets.mjs [--force]` | 拉取示例 VRM：多镜像回退 + sha256 校验（`bash tools/fetch-assets.sh` 是同一实现的薄封装） |
 | `node tools/inspect-vrm.mjs <file.vrm> [--json\|--manifest]` | 能力探测 |
 | `node tools/validate-clip.mjs <clip.json> [--target <manifest>]` | 校验动作文件，退出码 0/1/2 |
 | `bash tools/dev-browser.sh status\|up\|down` | 无头浏览器进程管家（仅 Windows） |
+
+---
+
+## 网络问题排查（国内网络容易出现）
+
+`npm ci` 或拉资产失败时，按这个顺序排：
+
+### 1. 先看报错里的 IP
+
+如果日志里是 `connect ETIMEDOUT 198.18.x.x:443`：
+
+`198.18.0.0/15` 是 RFC 2544 保留段，**不是公网地址**。Clash / Clash Verge 这类代理在 TUN 模式下
+默认用 `198.18.0.1/16` 作为 fake-ip 池 —— 也就是说**代理劫持了 DNS，返回了一个永远连不上的假 IP**。
+
+处置：关掉代理，或把 `registry.npmjs.org` 加进直连规则。
+
+> ⚠️ 这种情况下 npm 最后会打印 `error Exit handler never called!` 并说 "This is an error with npm itself"。
+> 那是 npm 在硬网络失败时自己的 bug，**它会把真正的错误盖掉**。要看上面几十行的 `ETIMEDOUT`。
+
+### 2. 改用国内镜像（已实测可用）
+
+```bash
+cd web && npm ci --registry=https://registry.npmmirror.com --no-audit
+```
+
+npm 默认开启 `replace-registry-host=npmjs`，会把 lockfile 里指向 `registry.npmjs.org` 的
+`resolved` 地址换成配置的镜像，所以 **不需要改 lockfile**。
+
+### 3. 拉资产（已内置镜像回退，无需配置）
+
+`tools/fetch-assets.mjs` 会依次尝试官方源 → jsDelivr，**且每个镜像都要通过 sha256 校验才采用**，
+校验不过就继续试下一个，不会静默把损坏资产引进仓库。无需额外配置。
+
+若两个镜像都连不上，脚本会打印可操作的排查建议（含挂代理重试的完整命令）。
 
 ---
 
