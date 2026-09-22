@@ -23,7 +23,12 @@ param(
 
   [int]$Port = 9222,
   [string]$Url = 'http://localhost:3000/',
-  [int]$CpuWarn = 70
+  [int]$CpuWarn = 70,
+
+  # GL 后端：hardware = 用真显卡（AMD Radeon 780M）；swiftshader = 软件光栅化
+  # 实测：swiftshader 会把 16 逻辑核跑到 100%，hardware 低得多——默认用 hardware
+  [ValidateSet('hardware', 'swiftshader')]
+  [string]$Gl = 'hardware'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -163,16 +168,21 @@ switch ($Action) {
     if (-not (Test-Path $ProfileDir)) { New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null }
 
     Write-Host ''
-    Write-Host '=== 启动（仅 1 个实例） ===' -ForegroundColor Cyan
+    Write-Host ("=== 启动（仅 1 个实例，GL={0}） ===" -f $Gl) -ForegroundColor Cyan
+
+    $glArgs = if ($Gl -eq 'swiftshader') {
+      @('--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader')
+    } else {
+      @('--use-angle=default')
+    }
+
     $args = @(
       '--headless=new', '--no-sandbox',
-      '--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader',
       '--disable-http-cache',
       "--remote-debugging-port=$Port",
       '--window-size=1400,900',
-      "--user-data-dir=$ProfileDir",
-      $Url
-    )
+      "--user-data-dir=$ProfileDir"
+    ) + $glArgs + @($Url)
     $proc = Start-Process -FilePath $Chrome -ArgumentList $args -PassThru -WindowStyle Hidden
     $proc.Id | Set-Content $PidFile
     Start-Sleep -Seconds 6

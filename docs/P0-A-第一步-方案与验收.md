@@ -249,43 +249,66 @@ case MOUSE.PAN:                          // 右键默认映射
 
 ---
 
-## 九、开发环境纪律：headless Chrome 会打满 CPU（2026-09-22）
+## 九、开发环境纪律：headless Chrome 的 CPU 占用（2026-09-22）
 
-### 实测数据
+### 先给结论：能被 CPU 打满，**是命令行 flag 选错，不是 headless 的锅**
 
-| 状态 | 进程数 | CPU 峰值（16 逻辑核） |
-|---|---|---|
-| 基线（只有 dev server） | 0 chrome | **8%** |
-| **仅 1 个** headless Chrome 实例 | **10 个 chrome 进程** | **100%** |
-| 清理后 | 0 | **8%** |
+对照实验（同一页面、同一台机器、各段均先 `down` 再开，全程只 1 个实例）：
 
-**单个实例就能打满 16 核。** 元凶不是死循环：
+| GL 后端 | 启动参数 | WebGL renderer | 帧率 | CPU 净增（16 逻辑核） |
+|---|---|---|---|---|
+| **hardware**（默认） | `--use-angle=default` | ANGLE (**AMD, AMD Radeon 780M, Direct3D11**) | **119.9 fps** | **+5%** |
+| swiftshader（❌ 错用） | `--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader` | ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero))) | 20.9 fps | **+88%** |
 
-- 实测帧率 **22.9 fps**（`renderer.info.render.frame` 3 秒采样）→ rAF **是**被节流的，循环没空转
-- WebGL renderer = `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)))` → **软件光栅化**
-- 软光栅化是多线程的，22.9 fps @ 1030×640 就能吃掉全部核心
+**`--headless=new` 在 Windows 上完全能用真显卡**（走 ANGLE → Direct3D11）。
+我一开始想当然地认为「无头环境没有 GPU，得退回软渲染」，于是主动加了 SwiftShader 参数，
+把本来 5% 的开销放大到了 88%。**根因是自己的 flag，不是 headless 机制。**
 
-> 顺带：22.9 fps 恰好落在 §十一 G5 的「20–30 fps → 需降配」档位。但这是**软渲染**下的数字，
-> 不能拿来判目标机性能，G5 仍必须到场用真实显卡实测。
+参考：用户用 Edge 看同一个页面 CPU 一直很低 —— 因为 Edge 走的就是同一张 780M。
+
+### 附带确认的两个事实
+
+- **rAF 是 vsync 节流的**：hardware 模式下实测 **119.9 fps**，正好等于屏幕刷新率 120Hz。
+  所以循环没有空转，也不会无限渲染。
+- 软渲染下 20.9 fps 落在 §十一 G5 的「20–30 fps → 需降配」档位。
+  **这恰好让 `-Gl swiftshader` 变成了一个有用的工具**：可以在本地模拟"目标机没独显"的情况，
+  用来预演 G5 的降配分支。但不能拿这个数字判目标机性能，G5 仍必须到场用真实显卡实测。
+
+### 另一个独立问题：进程叠着跑 + 整树杀
+
+即使 GL 后端选对了，叠多个实例一样会出事。实测：**1 个实例 = 10 个 chrome 进程**（主进程 + renderer
++ gpu-process + utility×N + crashpad）。
+
+- `pkill -f "remote-debugging-port"` **杀不干净**：它只匹配浏览器主进程的命令行，
+  renderer/gpu 子进程命令行里没有这个标志 → 变孤儿继续跑 → 进程越积越多
+- 必须 `taskkill /PID x /T /F` **整树杀**
 
 ### 规矩（`tools/dev-browser.sh`）
 
 ```bash
-bash tools/dev-browser.sh status   # 进程数 + CPU 峰值 + 端口
-bash tools/dev-browser.sh down     # 清理 headless chrome（/T 整树杀）
-bash tools/dev-browser.sh up       # 先清后开，只开 1 个实例；CPU ≥70% 直接拒绝启动
-bash tools/dev-browser.sh cpu      # 只看 CPU
+bash tools/dev-browser.sh status                # 进程数 + CPU 峰值 + 端口
+bash tools/dev-browser.sh down                 # 清理 headless chrome（/T 整树杀）
+bash tools/dev-browser.sh up                   # 先清后开，默认 hardware，只开 1 个实例
+bash tools/dev-browser.sh up -Gl swiftshader   # 只在需要模拟无 GPU 目标机时用
+bash tools/dev-browser.sh cpu                  # 只看 CPU
 ```
 
-1. **重开前必须先 `down`**，绝不叠着跑
-2. **杀进程必须整树**（`taskkill /PID x /T /F`）。`pkill -f "remote-debugging-port"` 只匹配浏览器主进程，
-   renderer/gpu 子进程会变孤儿继续跑 rAF 循环 —— 这是我上一轮 CPU 被打满的直接原因
-3. 用完立刻 `down`，并确认 **chrome.exe 归零**
-4. CPU 采样取 **3 次峰值**（单次采样可能读到 0% 的假空闲）
-5. 脚本只处理命令行里带 `--headless` 或本项目路径的 chrome.exe，**不会碰你自己正常用的 Chrome / Edge**
+1. **GL 后端默认 hardware**（`--use-angle=default`）；不确认 GPU 路径之前不要加 SwiftShader 参数
+2. **重开前必须先 `down`**，绝不叠着跑
+3. **杀进程必须整树**（`taskkill /PID x /T /F`）
+4. 用完立刻 `down`，并确认 **chrome.exe 归零**
+5. CPU 采样取 **3 次峰值**（单次采样可能读到 0% 的假空闲；实测过第一次读到 0%）
+6. 脚本只处理命令行里带 `--headless` 或本项目路径的 chrome.exe，**不会碰使用者自己正常用的 Chrome / Edge**
 
-### 另一个坑：Chrome profile 缓存会被写坏
+### 第三个坑：Chrome profile 缓存会被写坏
 
 反复强杀 Chrome 会把 profile 的缓存写坏，页面报 `net::ERR_CACHE_READ_FAILURE`，表现为
 「VRM 加载失败 / 模型 30 秒没加载出来」——看着像代码 bug，其实是环境脏了。
 `dev-browser.ps1` 的 `down` 会顺手删掉 `.g0/chrome-profile`；启动时带 `--disable-http-cache`。
+
+### 下次遇到 CPU 异常，按这个顺序查
+
+1. `bash tools/dev-browser.sh status` → 先看**进程数**是不是叠了（1 个实例应该是 10 个进程）
+2. `node .g0/fps.mjs` → 看 **WebGL renderer 字符串**：出现 `SwiftShader` 就是走了软渲染
+3. 看 **帧率**：≈ 屏幕刷新率（如 120）说明正常；远低于刷新率且 CPU 高，就是渲染后端有问题
+4. 都正常但 CPU 还高 → 才去查业务代码（死循环、重复 `vrm.update`、资源未释放）
