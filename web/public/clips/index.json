@@ -1,0 +1,83 @@
+{
+  "clips": [
+    {
+      "id": "raise-right-arm",
+      "name": "右抬手",
+      "url": "/clips/raise-right-arm.json",
+      "source": "generated",
+      "note": "基础站姿 → 右上臂抬至约肩高 → 回位",
+      "fps": 30,
+      "duration": 3,
+      "frameCount": 91,
+      "mask": [
+        "rightUpperArm"
+      ]
+    },
+    {
+      "id": "raise-left-arm",
+      "name": "左抬手",
+      "url": "/clips/raise-left-arm.json",
+      "source": "generated",
+      "note": "基础站姿 → 左上臂抬至约肩高 → 回位",
+      "fps": 30,
+      "duration": 3,
+      "frameCount": 91,
+      "mask": [
+        "leftUpperArm"
+      ]
+    },
+    {
+      "id": "bend-right-elbow",
+      "name": "右屈肘",
+      "url": "/clips/bend-right-elbow.json",
+      "source": "generated",
+      "note": "基础站姿 → 右肘弯曲约 90° → 回位",
+      "fps": 30,
+      "duration": 3,
+      "frameCount": 91,
+      "mask": [
+        "rightLowerArm"
+      ]
+    },
+    {
+      "id": "bend-left-elbow",
+      "name": "左屈肘",
+      "url": "/clips/bend-left-elbow.json",
+      "source": "generated",
+      "note": "基础站姿 → 左肘弯曲约 90° → 回位",
+      "fps": 30,
+      "duration": 3,
+      "frameCount": 91,
+      "mask": [
+        "leftLowerArm"
+      ]
+    },
+    {
+      "id": "turn-head",
+      "name": "转头",
+      "url": "/clips/turn-head.json",
+      "source": "generated",
+      "note": "向角色自身左转约 25° → 回正 → 向自身右转约 25° → 回正",
+      "fps": 30,
+      "duration": 4,
+      "frameCount": 121,
+      "mask": [
+        "head"
+      ]
+    },
+    {
+      "id": "wave-right-hand",
+      "name": "右手挥手",
+      "url": "/clips/wave-right-hand.json",
+      "source": "generated",
+      "note": "抬臂 → 屈肘 → 小幅往复挥动 → 放下",
+      "fps": 30,
+      "duration": 4,
+      "frameCount": 121,
+      "mask": [
+        "rightLowerArm",
+        "rightUpperArm"
+      ]
+    }
+  ]
+}

@@ -4,7 +4,7 @@
   "sha256": "624d0d554bc205bbdc33e22a68a2c3c20edebb3e573011ead8878a65e5329b23",
   "bytes": 10917800,
   "source": "https://github.com/vrm-c/vrm-specification (samples/Seed-san/vrm/Seed-san.vrm)",
-  "generatedAt": "2026-09-22 06:21:41",
+  "generatedAt": "2026-09-22 08:44:49",
   "vrm": {
     "specVersion": "1.0",
     "exporter": null,
@@ -31,9 +31,8 @@
     ],
     "hipsWorldY": 0.7956,
     "headWorldY": 1.332,
-    "heightM": 1.58,
-    "heightNote": "G0 实测：整模型 bounding box 高度（含头发），2026-09-22 于调试页读出；供相机取景与展示缩放的基准",
-    "g0MeasuredAt": "2026-09-22"
+    "heightM": null,
+    "heightNote": "身高需在 G0 用整模型 bounding box 实测（含头发网格）；此处 hipsWorldY/headWorldY 为骨骼基准值，供相机取景用"
   },
   "capabilities": {
     "expressionsPreset": [
@@ -63,8 +62,7 @@
     "lookAtType": "expression",
     "meshes": 5,
     "materials": 17,
-    "nodes": 147,
-    "springBoneNote": "springBoneGroups=规范级 springs 条数；运行时 three-vrm 另有 joint 数（19）与 collider 数（8），三者口径不同"
+    "nodes": 147
   },
   "license": {
     "licenseUrl": "https://vrm.dev/licenses/1.0/",
@@ -83,6 +81,7 @@
     "无 upperChest：脊柱链为 hips→spine→chest→neck→head 共 5 段，相关代码路径必须判空",
     "无 leftEye/rightEye/jaw：lookAt 只能走 expression 型，眼球不由骨骼驱动",
     "lookAt.type=expression：lookAtType 必须由运行时能力探测读取，禁止在代码里写死",
-    "本资产仅供工程验证（G0/G1/G2），不是最终演示角色；正式角色是 companion.vrm"
+    "本资产仅供工程验证（G0/G1/G2），不是最终演示角色；正式角色是 companion.vrm",
+    "自带一个名为 robo_arm 的道具网格（独立根节点，不挂在人形骨架下）——它在所有姿态里都不动，不是骨骼变形失败。人工验收\"网格随骨骼变形\"时应忽略它"
   ]
 }

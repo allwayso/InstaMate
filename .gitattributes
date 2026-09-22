@@ -1,0 +1,15 @@
+# 统一行尾，避免"工具生成 LF / git checkout 成 CRLF"造成的假改动。
+#
+# 背景（实测）：生成器 tools/gen-clips.mjs 是**确定性**的（两次生成产出的内容哈希一致），
+# 但在 Windows 上克隆后 web/public/clips/*.json 会被 checkout 成 CRLF，
+# 重新生成（LF）就被 git 报成 modified —— 看着像生成器不确定，其实只是行尾。
+# 只固定"会被工具重新生成"的文件，不做全仓库重新规范化，避免把无关文件卷进 diff。
+web/public/clips/*.json text eol=lf
+
+# 二进制：禁止任何行尾/文本转换
+*.vrm binary
+*.pdf binary
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary
