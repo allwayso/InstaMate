@@ -18,6 +18,14 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SEED_SAN_SHA = '624d0d554bc205bbdc33e22a68a2c3c20edebb3e573011ead8878a65e5329b23';
+/** 第二角色：three-vrm 官方示例，用于 G2 的双角色兼容验证 */
+const COMPAT_VRM_SHA = '12c2b97e95e700783a6a550dc0eee2d7880aeedccef9ae67bc4c5a2f0f2631a2';
+/**
+ * ★ 固定到具体 commit，**不跟随 dev 分支漂移**。
+ * 这个文件最后改动于 2023-03-03（已三年未变），用 commit 锁住可保证
+ * 不同机器、不同时间拉到的字节完全一致 —— 否则 sha256 校验就成了摆设。
+ */
+const COMPAT_VRM_COMMIT = '5a3242b66124386c32b085c6693d9059040e72e5';
 
 /**
  * 资产表。每个资产可配多个 URL，按顺序尝试，第一个 sha256 校验通过的即采用。
@@ -32,6 +40,30 @@ const ASSETS = [
     urls: [
       'https://raw.githubusercontent.com/vrm-c/vrm-specification/master/samples/Seed-san/vrm/Seed-san.vrm',
       'https://cdn.jsdelivr.net/gh/vrm-c/vrm-specification@master/samples/Seed-san/vrm/Seed-san.vrm',
+    ],
+  },
+  {
+    /**
+     * VRM1_Constraint_Twist_Sample（pixiv Inc.，licenseUrl: vrm.dev/licenses/1.0，
+     * creditNotation: unnecessary）
+     *
+     * 为什么用它做第二角色 —— 它正好压到两个能力分支，而且身体比例与 Seed-san 不同：
+     *   · humanoid 54/55（只缺 jaw），**有 upperChest**（Seed-san 没有）
+     *   · lookAt.type = **bone**（Seed-san 是 expression）
+     *   · 22 组弹簧骨 / 13 碰撞体（Seed-san 是 9 组 / 19 关节）
+     *   · hipsWorldY 0.9081 / headWorldY 1.3863（Seed-san 0.7956 / 1.332）
+     *
+     * 比例不同这一点很关键：它同时验证了 G1「clip 只存旋转、不存骨长与位移」这个设计决定 ——
+     * 同一份 clip 必须能驱动两个骨长不同的角色。
+     *
+     * 只用于工程兼容验证；B 的 companion-rough.vrm 到位后要替换并重跑 G2 验收。
+     */
+    name: 'compat.vrm',
+    dest: 'web/public/avatars/compat.vrm',
+    sha256: COMPAT_VRM_SHA,
+    urls: [
+      `https://raw.githubusercontent.com/pixiv/three-vrm/${COMPAT_VRM_COMMIT}/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm`,
+      `https://cdn.jsdelivr.net/gh/pixiv/three-vrm@${COMPAT_VRM_COMMIT}/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm`,
     ],
   },
 ];
