@@ -12,61 +12,26 @@
  * 所以：把文件复制进 public/，并让 `locateFile` 恒定返回 `/vendor/mediapipe/holistic/<file>`。
  * 同时提供 `--check`，让页面启动前能明确报错「缺哪个文件」，而不是静默失败。
  *
- * 文件清单来自 `holistic.js` 内反查出的直接请求（7 个），加上它们各自再去加载的
- * .wasm / .data（见下方 REQUESTED_BY_LOADERS）。
+ * 文件清单不在这里 —— 在 `web/lib/mocap/mediapipe-assets.ts`（单一真相源），
+ * 运行时自检与页面用的是同一份。Node 直接 import .ts 是 G1 就验证过的做法。
  */
 import { existsSync, mkdirSync, readFileSync, statSync, copyFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  MEDIAPIPE_HOLISTIC_VERSION as PINNED_VERSION,
+  MEDIAPIPE_PACKAGE_DIR,
+  VENDOR_DIR,
+  REQUIRED_VENDOR_FILES,
+  SKIPPED_VENDOR_FILES,
+} from '../web/lib/mocap/mediapipe-assets.ts';
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SRC_DIR = join(ROOT, 'web', 'node_modules', '@mediapipe', 'holistic');
-const OUT_DIR = join(ROOT, 'web', 'public', 'vendor', 'mediapipe', 'holistic');
-
-/** 包版本（写进日志与 manifest，便于排查"是不是版本对不上"） */
-const PINNED_VERSION = '0.5.1675471629';
-
-/**
- * holistic.js 里直接按名字请求的文件。
- * 该清单是用 `grep -oE '"[a-zA-Z0-9_.]+\.(wasm|data|js|tflite|binarypb)"' holistic.js` 反查出来的，
- * 不是猜的。
- */
-const DIRECT_REQUESTS = [
-  'holistic.binarypb',
-  'holistic_solution_packed_assets_loader.js',
-  'holistic_solution_simd_wasm_bin.js',
-  'holistic_solution_wasm_bin.js',
-  'pose_landmark_lite.tflite',
-  'pose_landmark_full.tflite',
-];
-
-/**
- * 由上面那些 loader .js 再去加载的二进制。也要一起复制，
- * 否则 loader 起来了但 wasm 404 —— 同样是卡住不报错。
- *
- * 注意 simd / 非 simd 两个分支**不对称**（实测）：
- *   simd     分支: holistic_solution_simd_wasm_bin.js + .wasm + .data(0 字节,占位)
- *   非 simd  分支: holistic_solution_wasm_bin.js + .wasm      ← 没有 .data
- * 资产本体在 holistic_solution_packed_assets.data 里。
- */
-const REQUESTED_BY_LOADERS = [
-  'holistic_solution_packed_assets.data',
-  'holistic_solution_simd_wasm_bin.wasm',
-  'holistic_solution_simd_wasm_bin.data',
-  'holistic_solution_wasm_bin.wasm',
-];
-
-/**
- * 刻意不复制的大文件。
- * `pose_landmark_heavy.tflite` 27.7 MB，只在 `modelComplexity: 2` 时才会被加载，
- * 我们固定用 1（full）。省掉它让 vendor 体积从 76 MB 降到约 48 MB。
- * 如果以后要调 modelComplexity，把它加回 REQUIRED 即可。
- */
-const SKIPPED = [
-  { file: 'pose_landmark_heavy.tflite', reason: '仅 modelComplexity:2 需要，我们固定用 1(full)' },
-];
-
-const REQUIRED = [...DIRECT_REQUESTS, ...REQUESTED_BY_LOADERS];
+const SRC_DIR = join(ROOT, MEDIAPIPE_PACKAGE_DIR);
+const OUT_DIR = join(ROOT, VENDOR_DIR);
+const REQUIRED = [...REQUIRED_VENDOR_FILES];
+const SKIPPED = [...SKIPPED_VENDOR_FILES];
 
 const args = process.argv.slice(2);
 const checkOnly = args.includes('--check');
@@ -86,7 +51,7 @@ function readPkgVersion() {
   }
 }
 
-/** 收集状态：不复制，只报告。`--check` 与页面自检都用这个口径。 */
+/** 收集状态：不复制，只报告。`--check` 与页面自检用同一口径。 */
 function inspect() {
   const files = [];
   for (const name of REQUIRED) {
@@ -109,8 +74,8 @@ function report(ok, files, note) {
       JSON.stringify(
         {
           ok,
-          source: 'node_modules/@mediapipe/holistic',
-          outDir: 'web/public/vendor/mediapipe/holistic',
+          source: MEDIAPIPE_PACKAGE_DIR,
+          outDir: VENDOR_DIR,
           version: { expected: PINNED_VERSION, found: readPkgVersion() },
           required: REQUIRED,
           skipped: SKIPPED,
@@ -152,8 +117,8 @@ if (foundVersion !== PINNED_VERSION) {
 
 if (checkOnly) {
   const files = inspect();
-  const missing = files.filter((f) => !f.destExists);
-  const sizeMismatch = files.filter((f) => f.destExists && f.srcExists && f.srcBytes !== f.destBytes);
+  const missing = files.filter((f) => !f.destExists).map((f) => f.name);
+  const sizeMismatch = files.filter((f) => f.destExists && f.srcExists && f.srcBytes !== f.destBytes).map((f) => f.name);
   const ok = missing.length === 0 && sizeMismatch.length === 0;
   if (!asJson) {
     log('检查 MediaPipe Holistic 本地资源（web/public/vendor/mediapipe/holistic/）');
@@ -180,17 +145,12 @@ const toCopy = before.filter(
 );
 
 log('同步 MediaPipe Holistic 本地资源');
-log(`  源   node_modules/@mediapipe/holistic  (v${foundVersion})`);
-log(`  目标 web/public/vendor/mediapipe/holistic/`);
+log(`  源   ${MEDIAPIPE_PACKAGE_DIR}  (v${foundVersion})`);
+log(`  目标 ${VENDOR_DIR}/`);
 log(`  需要 ${REQUIRED.length} 个文件，本次需复制 ${toCopy.length} 个\n`);
 
 for (const f of toCopy) {
-  const src = join(SRC_DIR, f.name);
-  if (!existsSync(src)) {
-    console.error(`  ✗ ${f.name}：源文件不存在（npm 包不完整？）`);
-    process.exit(1);
-  }
-  copyFileSync(src, join(OUT_DIR, f.name));
+  copyFileSync(join(SRC_DIR, f.name), join(OUT_DIR, f.name));
   log(`  复制 ${f.name.padEnd(42)} ${mb(f.srcBytes)}`);
 }
 
@@ -210,7 +170,6 @@ log('\n刻意未复制：');
 for (const s of SKIPPED) log(`  - ${s.file}（${s.reason}）`);
 log('\n本地资源齐全。');
 
-// 顺带把实际目录列出来，方便人核对有没有多余文件
 if (!asJson) {
   const extras = readdirSync(OUT_DIR).filter((n) => !REQUIRED.includes(n));
   if (extras.length) log(`\n注意：目录里还有清单外的文件：${extras.join(', ')}`);
