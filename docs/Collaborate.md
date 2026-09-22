@@ -83,14 +83,36 @@ interface CharacterController {
 
 驱动状态机事件：`listening` → `thinking` → `speaking`。
 
-### 4. 依赖与环境（版本必须在 P0 结束前冻结）
+### 4. 依赖与环境（版本已于 9/22 冻结）
 
 - A：`three` + `@pixiv/three-vrm`，锁定一组实际验证过的兼容版本
 - C：`kalidokit` 锁定版本；`@mediapipe/holistic` **钉在 0.5.x**（该包已 EOL，但 Kalidokit 只吃它的输出格式；两天赛程内不迁移 `tasks-vision`，迁移属赛后能力）
 - D：LLM API key + `edge-tts`，记录精确版本
 - MediaPipe 模型与 WASM **下载到本地静态目录并记录版本，禁止依赖 CDN 直连**（现场网络故障是必须消除的风险）
-- JS 依赖统一进入 `web/package.json` + `package-lock.json`；Python 侧写 `requirements.txt`；模型/WASM 版本与 TTS 版本分别记录
-- **四份清单**（JS lockfile / Python requirements / 模型与 WASM 版本 / TTS 版本）在 P0 结束前冻结；此后任何版本变更都必须重跑对应的 G 门槛
+
+**四份清单在 P0 结束前冻结**：① JS lockfile ② Python requirements.txt ③ 模型与 WASM 版本 ④ TTS 版本。此后任何版本变更都必须重跑对应的 G 门槛。
+
+#### 清单 ①：JS 依赖（冻结于 2026-09-22，已用 `npm ci` 验过可复现）
+
+Node `24.16.0` / npm `11.13.0`
+
+| 包 | package.json | lockfile 实际 | 用途 |
+|---|---|---|---|
+| `next` | `16.3.5` | `16.3.5` | App Router（D 的 `app/api/chat/` 需要 route handler 藏 key） |
+| `react` / `react-dom` | `19.2.8` | `19.2.8` | 注：取 `create-next-app@16.3.5` 自己钉的版本，不追 `npm view react version`（后者为 19.3.0，未经 Next 验证） |
+| `three` | `0.186.0` | `0.186.0` | 渲染 |
+| `@pixiv/three-vrm` | `3.5.5` | `3.5.5` | peer `three >=0.137`；自带 mtoon / springbone / node-constraint 子包 |
+| `@types/three` | `0.186.0` | `0.186.0` | **three 0.186 已不自带类型**，必须单独装，且版本号要跟 three 对齐 |
+| `typescript` | `5.9.3` | `5.9.3` | 取 5.x 最新，不跨到 7.x |
+| `@types/node` | `24.13.6` | `24.13.6` | 对齐运行时 Node 24 |
+| `@types/react` / `@types/react-dom` | `19.2.18` / `19.2.7` | 同左 | 对齐 react 19.2 |
+
+**已知风险**：`three@0.186.0`（9/08）比 `@pixiv/three-vrm@3.5.5`（7/09）新两个月。peer 允许 ≠ 验证过。
+**回退方案**：G0 失败 → `three` 退 `0.180.x`（`@types/three` 同步），其余不动，重跑 G0/G1。
+
+**已验证的兼容性证据**：G0 静态渲染已通过——sample.vrm 的 MToon 材质、9 组弹簧骨（19 关节 / 8 碰撞体）、18 个表情全部正确加载，运行时探测输出与 `assets/vrm/sample.manifest.json` 逐项一致。
+
+**清单 ②③④**（Requirements / 模型与 WASM / TTS）待 C、D 在 P0 结束前补齐。
 
 ---
 
