@@ -572,3 +572,17 @@ select {
 }
 code { background: #0f1319; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 .hint { color: #737b8a; font-size: 12px; }
+
+/* 数据到位诊断：哪一路关键数据缺了，必须一眼可见 */
+.camera-dataflow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.camera-dataflow .flow-ok { color: #51cf66; cursor: help; }
+.camera-dataflow .flow-missing { color: #ff6b6b; font-weight: 600; cursor: help; }
+.camera-dataflow .mono { font-family: ui-monospace, monospace; color: #737b8a; }
+.camera-dataflow .flow-empty { color: #737b8a; cursor: help; }

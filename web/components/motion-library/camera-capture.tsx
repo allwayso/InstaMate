@@ -45,6 +45,26 @@ interface Props {
 const VIDEO_W = 640;
 const VIDEO_H = 480;
 
+const FLOW_LABEL = { pose: '身体点', world: '世界坐标', hands: '手部', face: '面部' } as const;
+
+/**
+ * 每个数据流的"缺了会怎样"。
+ * 写在界面上而不是只写在代码注释里 —— 这几个字段缺任何一个，
+ * 表现出来的都是"看起来在动但其实没数据"，不指明原因很难查。
+ */
+function hintFor(k: 'pose' | 'world' | 'hands' | 'face'): string {
+  switch (k) {
+    case 'pose':
+      return '归一化身体关键点（33 点）。覆盖层画的就是它；缺了画面上什么都没有。';
+    case 'world':
+      return '世界坐标（米）。★ Kalidokit 的必需输入，且必须是米制 —— 喂归一化坐标会让整条手臂被丢弃。在 Holistic 里这个流的键名叫 za，不叫 poseWorldLandmarks。';
+    case 'hands':
+      return '左右手 21 点。只用于提高手腕置信度与覆盖层显示；G2 不驱动手指。';
+    case 'face':
+      return '468 点面部网格。用于头部旋转与头颈置信度；缺了头部轨道会保持上一有效姿态。';
+  }
+}
+
 export default function CameraCapture({ onFrame, onStatus, onError, locked, handleRef }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -56,6 +76,8 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
     face: Landmark[] | null;
   }>({ pose: null, leftHand: null, rightHand: null, face: null });
   const connectionsRef = useRef<HolisticConnections | null>(null);
+  const resultKeysRef = useRef<string[]>([]);
+  const worldFieldRef = useRef<boolean | null>(null);
 
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [detail, setDetail] = useState('');
@@ -66,6 +88,14 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
   const [fps, setFps] = useState(0);
   const [inferenceMs, setInferenceMs] = useState(0);
   const [layers, setLayers] = useState<OverlayLayers>({ pose: true, hands: true, face: false });
+  const [present, setPresent] = useState<Record<'pose' | 'world' | 'hands' | 'face', boolean>>({
+    pose: false,
+    world: false,
+    hands: false,
+    face: false,
+  });
+  const [resultKeys, setResultKeys] = useState<string[]>([]);
+  const [worldFieldAvailable, setWorldFieldAvailable] = useState<boolean | null>(null);
 
   const onFrameRef = useRef(onFrame);
   onFrameRef.current = onFrame;
@@ -84,6 +114,14 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
       if (s) {
         setFps(s.inferenceFps);
         setInferenceMs(s.inferenceMs);
+        if (resultKeysRef.current.length === 0 && s.resultKeys.length) {
+          resultKeysRef.current = s.resultKeys;
+          setResultKeys(s.resultKeys);
+        }
+        if (worldFieldRef.current === null) {
+          worldFieldRef.current = s.worldFieldAvailable;
+          setWorldFieldAvailable(s.worldFieldAvailable);
+        }
       }
     };
     raf = requestAnimationFrame(loop);
@@ -129,6 +167,14 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
           onError?.(e.message);
         },
         onFrame: (frame) => {
+          // 关键数据到位情况：每帧更新一次，缺什么一眼可见
+          setPresent({
+            pose: !!frame.poseLandmarks?.length,
+            // ★ 世界坐标是 Kalidokit 的必需输入；它在 holistic 里叫 `za`
+            world: !!frame.poseWorldLandmarks?.length,
+            hands: !!(frame.leftHandLandmarks?.length || frame.rightHandLandmarks?.length),
+            face: !!frame.faceLandmarks?.length,
+          });
           lastFrameRef.current = {
             pose: frame.poseLandmarks,
             leftHand: frame.leftHandLandmarks,
@@ -247,6 +293,30 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         <span className="hint">
           帧回调 {sessionRef.current?.usingVideoFrameCallback ? 'rVFC' : 'rAF/—'}
         </span>
+      </div>
+
+      <div className="camera-dataflow">
+        <span className="hint">数据到位：</span>
+        {(['pose', 'world', 'hands', 'face'] as const).map((k) => {
+          const ok = present[k];
+          // 世界坐标要区分两种情况：字段不存在（代码 bug，必须报错）
+          // vs 字段在但没有数据（没检到人，正常）
+          const fieldMissing = k === 'world' && worldFieldAvailable === false;
+          const cls = ok ? 'flow-ok' : fieldMissing ? 'flow-missing' : 'flow-empty';
+          const mark = ok ? '✓' : fieldMissing ? '✗' : '·';
+          const suffix = k === 'world' && fieldMissing ? '（字段缺失！）' : ok ? '' : '（无数据）';
+          return (
+            <span key={k} className={cls} title={hintFor(k)}>
+              {mark} {FLOW_LABEL[k]}
+              {suffix}
+            </span>
+          );
+        })}
+        {resultKeys.length > 0 && (
+          <span className="hint mono" title="Holistic 实际返回的键名">
+            返回键: {resultKeys.filter((k) => k !== 'image').join(', ')}
+          </span>
+        )}
       </div>
 
       <div className="camera-legend">

@@ -273,6 +273,9 @@ export class HolisticSession {
     this.running = true;
     this.busy = false;
     this.forceRaf = false;
+    this.seenKeys.clear();
+    this.framesWithoutWorld = 0;
+    this.worldFieldSeen = null;
     this.frameTimes = [];
     this.setStatus('running', '识别中');
     this.scheduleFrame(gen);
@@ -293,6 +296,9 @@ export class HolisticSession {
     this.releaseStream();
     this.frameTimes = [];
     this.framesProcessedCount = 0;
+    this.seenKeys.clear();
+    this.framesWithoutWorld = 0;
+    this.worldFieldSeen = null;
     this.lastPoseInputs = { pose: null, world: null };
     if (this.status !== 'error') this.setStatus('stopped', '已关闭');
   }
@@ -399,8 +405,58 @@ export class HolisticSession {
   private handleResults(results: Record<string, unknown>, gen: number): void {
     if (gen !== this.generation || !this.running) return;
 
+    // ── 字段自检（跨帧累积）──────────────────────────────────────────
+    //
+    // ★ 不能用 `Object.keys(results)`：MediaPipe 的输出属性是**不可枚举的 getter**，
+    //   Object.keys 只返回 multiFaceGeometry 这类普通属性。
+    // ★ 也不能只看第一帧：MediaPipe **只在对应流有输出时才设置那个属性**，
+    //   所以某一帧里 poseLandmarks 可能就是 undefined。
+    //   必须逐帧累积，并且"字段缺失"要等足够多帧才判定 —— 否则会把
+    //   "这一帧没检到人"误报成"代码读错键名"。
+    const PROBE = [
+      'za',
+      'poseWorldLandmarks',
+      'poseLandmarks',
+      'leftHandLandmarks',
+      'rightHandLandmarks',
+      'faceLandmarks',
+      'segmentationMask',
+      'multiFaceGeometry',
+    ];
+    for (const k of PROBE) {
+      if (results[k] !== undefined && results[k] !== null) this.seenKeys.add(k);
+    }
+    for (const k of Object.keys(results)) this.seenKeys.add(k);
+
+    // `za` 是本版本的实际键名（内部 stream 名 world_landmarks）；
+    // `poseWorldLandmarks` 是类型定义那种"看上去更合理"的名字。两个都认。
+    const worldPresent = this.seenKeys.has('za') || this.seenKeys.has('poseWorldLandmarks');
+    if (worldPresent) {
+      this.worldFieldSeen = true;
+    } else {
+      this.framesWithoutWorld++;
+      // ★ 只有在**身体点已经能拿到**的前提下，才把"没有世界坐标"判成结构性问题。
+      //   否则会把"镜头前根本没有人"误报成"代码读错键名" ——
+      //   假摄像头（色块）就是这个情形，实测 179 帧里 poseLandmarks 一次都没出现。
+      const poseWorks = this.seenKeys.has('poseLandmarks');
+      if (poseWorks && this.framesWithoutWorld > 60) {
+        if (this.worldFieldSeen !== false) {
+          this.worldFieldSeen = false;
+          this.onError(
+            new Error(
+              `连续 ${this.framesWithoutWorld} 帧都没拿到世界坐标流（探测过 za 与 poseWorldLandmarks）。` +
+                `已见到的字段：${this.resultKeys.join(', ') || '(空)'}。` +
+                `世界坐标是 Kalidokit 的必需输入（且必须是米制），缺了整条重定向链都不会运行 ——` +
+                `但覆盖层照样会画身体点，所以看起来像"识别到了却没数据"。`,
+            ),
+          );
+        }
+      }
+    }
+
     const pose = toLandmarks(results.poseLandmarks);
-    const world = toLandmarks(results.poseWorldLandmarks);
+    // ★ 优先 za（实测的本版本键名），回退 poseWorldLandmarks
+    const world = toLandmarks(results.za ?? results.poseWorldLandmarks);
     this.lastPoseInputs = { pose, world };
 
     this.onFrame({
@@ -432,6 +488,59 @@ export class HolisticSession {
   }
 
   private framesProcessedCount = 0;
+
+  /**
+   * Holistic 返回过哪些键（自检用）。
+   *
+   * ★ 加这个是因为踩了一个很贵的坑：
+   *   @mediapipe/holistic 的世界坐标流**叫 `za`**（内部 stream 名是 world_landmarks），
+   *   **不是 `poseWorldLandmarks`** —— 它的 index.d.ts 里 `Results` 接口只写了
+   *   poseLandmarks / faceLandmarks / hands / segmentationMask / image，根本没提世界坐标。
+   *
+   *   读错键名的后果是链式的，而且全程不报错：
+   *     world = undefined → isBodyTracked() 恒 false → 校准检测率恒 0
+   *     → 同时 solvePose() 因 world 为 null 直接 return null，**Kalidokit 从未运行**
+   *   而覆盖层只画 poseLandmarks，所以屏幕上照样有骨骼点 ——
+   *   用户看到的是"能识别到点，但检测率 0"。
+   */
+  /** 跨帧累积见过的字段（MediaPipe 只在对应流有输出时才设置属性，单帧探测不可靠） */
+  private seenKeys = new Set<string>();
+  /** 至今从没出现过世界坐标字段的帧数 */
+  private framesWithoutWorld = 0;
+  /**
+   * 世界坐标那个流**字段本身存不存在**。
+   *
+   * 与"有没有数据"是两件事，必须分开：
+   *   · 字段不存在 → 我读错键名了（这次的 bug），必须立刻报错
+   *   · 字段存在但长度为 0 → 没检到人，正常帧，不该报错
+   * 混在一起就会把"没检到人"当成"代码坏了"，或者反过来把 bug 藏起来。
+   */
+  private worldFieldSeen: boolean | null = null;
+
+  /**
+   * 已见过的结果字段名（诊断用）。
+   *
+   * ★ 注意不能只用 `Object.keys(results)`：MediaPipe 的输出是**不可枚举的 getter**，
+   *   Object.keys 只会返回 multiFaceGeometry 这种普通属性。
+   *   必须按已知名字逐个探测 `results[name] !== undefined`。
+   */
+  get resultKeys(): string[] {
+    return [...this.seenKeys];
+  }
+
+  /** 世界坐标字段是否可用（null = 还没收到过结果） */
+  get worldFieldAvailable(): boolean | null {
+    return this.worldFieldSeen;
+  }
+
+  /**
+   * 身体点是否曾经出现过。
+   * 与 worldFieldAvailable 配合使用：只有在"身体点能拿到"的前提下，
+   * "没有世界坐标"才是结构性问题；否则只是镜头前没人。
+   */
+  get poseFieldAvailable(): boolean {
+    return this.seenKeys.has('poseLandmarks');
+  }
 
   /** 官方连接拓扑（模型加载后才可用） */
   get connectionsOrNull(): HolisticConnections | null {

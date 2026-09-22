@@ -564,6 +564,9 @@ export default function MotionLibraryPage() {
               inferenceFps: s.inferenceFps,
               inferenceMs: s.inferenceMs,
               framesProcessed: s.framesProcessed,
+              resultKeys: s.resultKeys,
+              worldFieldAvailable: s.worldFieldAvailable,
+              poseFieldAvailable: s.poseFieldAvailable,
               usingRvfc: s.usingVideoFrameCallback,
               activeTracks: s.activeTrackCount,
             }
