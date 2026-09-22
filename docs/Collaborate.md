@@ -1,6 +1,7 @@
 # InstaMate · 影伴 — 4 人分工方案
 
 > 两天赛程 · 赛道一 AI+影像
+> **Day 1 = 9/22（今天）｜Day 2 = 9/23｜交付截止 = 9/23 晚间**（按 20:00 倒排，精确时点以组委会通知为准）
 > 关联文档：`PLAN.md`、`docs/photo-to-3d-research.md`、`docs/companion-window-analysis.md`
 
 ---
@@ -23,14 +24,14 @@
 
 | 角色 | 负责模块 | 核心交付物 | 文件归属（单人所有，避免冲突） |
 |---|---|---|---|
-| **A · 角色集成（核心路径）** | WS 位置 → `vrm.lookAt.target` + 弹簧阻尼；眨眼/呼吸/Perlin 生命层；状态机 | 角色在窗里看着你（Day 1 下午必须跑通） | `web/components/display-case.tsx`、新增 `web/lib/vrm-character.ts`、`web/lib/state-machine.ts` |
+| **A · 角色集成（核心路径）** | WS 位置 → `vrm.lookAt.target` + 弹簧阻尼；眨眼/呼吸/Perlin 生命层；状态机 | 角色在窗里看着你（**9/22 24:00 前必须跑通**，即 P1 第三段） | `web/components/display-case.tsx`、新增 `web/lib/vrm-character.ts`、`web/lib/state-machine.ts` |
 | **B · 形象产线** | 拍摄规范 → 动漫设定图 → VRoid 捏人 → VRM 1.0 → 动态验收 | 一个通过骨骼、蒙皮、表情测试的专属 VRM | `assets/vrm/`、`web/public/avatars/` |
 | **C · 动捕与动作库** | 录像 → MediaPipe + Kalidokit → 标准骨架重定向 → JSON clip；播放器 + 渐变混合 | 先交付 1 个通过双角色测试的动作，再扩展到 6 个 | `tools/mocap/`、`web/lib/clip-player.ts`、`web/public/clips/*.json` |
 | **D · 对话·记忆·语音 + 演示包装** | LLM(注入记忆 JSON) + edge-tts + 音量驱动嘴型 + 情绪表情；演示脚本/PPT/备份视频 | 对话环 + 3 分钟演示 | `web/components/chat-panel.tsx`、`web/app/api/chat/`、`data/memory.json`、`docs/demo-script.md` |
 
 ---
 
-## 三、接口契约（Day 0 晚全员 30 分钟冻结）
+## 三、接口契约（**9/22 15:00** 全员 30 分钟冻结）
 
 ### 1. `CharacterController`（A 提供，C/D 只消费）
 
@@ -82,46 +83,58 @@ interface CharacterController {
 
 驱动状态机事件：`listening` → `thinking` → `speaking`。
 
-### 4. 依赖与环境
+### 4. 依赖与环境（版本必须在 P0 结束前冻结）
 
 - A：`three` + `@pixiv/three-vrm`，锁定一组实际验证过的兼容版本
-- C：`npm i kalidokit @mediapipe/holistic`
-- D：LLM API key + `edge-tts` 可用性验证
-- JS 依赖统一进入 `web/package.json` 和 lockfile；Python CLI、MediaPipe 模型/WASM、TTS 运行环境分别记录并验证
+- C：`kalidokit` 锁定版本；`@mediapipe/holistic` **钉在 0.5.x**（该包已 EOL，但 Kalidokit 只吃它的输出格式；两天赛程内不迁移 `tasks-vision`，迁移属赛后能力）
+- D：LLM API key + `edge-tts`，记录精确版本
+- MediaPipe 模型与 WASM **下载到本地静态目录并记录版本，禁止依赖 CDN 直连**（现场网络故障是必须消除的风险）
+- JS 依赖统一进入 `web/package.json` + `package-lock.json`；Python 侧写 `requirements.txt`；模型/WASM 版本与 TTS 版本分别记录
+- **四份清单**（JS lockfile / Python requirements / 模型与 WASM 版本 / TTS 版本）在 P0 结束前冻结；此后任何版本变更都必须重跑对应的 G 门槛
 
 ---
 
 ## 四、时间线（四泳道）
 
-### Day 0 晚（准备，1–2 小时）
+> 原「Day 0 晚 + Day 1 上午」已随日历过期（Day 0 晚应在 9/21，Day 1 上午为 9/22 上午），
+> 故按 **9/22 14:00 开工** 重压为 P0–P4 五个阶段，总可用时间约 31 小时。
+> 压缩原则：**先保 G2（真实动作驱动双角色），再保 G3（注视+动作叠加），P2 动作库能用程序化替代。**
+
+### P0 · 准备与接口冻结：9/22 14:00–17:00
 
 | A | B | C | D |
 |---|---|---|---|
-| 示例 VRM + 程序化抬手 + 控制器骨架 | 导出最简 VRM 1.0 粗版，参加骨骼/蒙皮验收 | 录单侧抬手，验证解算环境；与 A 冻结动作契约 | 确认 LLM/TTS；用假控制器验证对话事件 |
+| 示例 VRM + 程序化抬手 + 控制器骨架 | 导出 `companion-rough.vrm`（最简 VRM 1.0），参加骨骼/蒙皮验收 | 录单侧抬手 1 段（≥3 秒），验证 holistic 解算环境 | 确认 LLM/TTS；用假控制器验证对话事件 |
 
-### Day 1 上午：形象产线
+**全员 15:00 开 30 分钟接口冻结会**：`CharacterController`、clip JSON schema、对话事件 schema，以及 §三.4 的四份版本清单。
 
-| A | B | C | D |
-|---|---|---|---|
-| 与 C 跑通真实抬手 clip；验证同一动作复用两个角色 | 设定图 → 捏人；先交粗版 .vrm，不等美术完稿 | 解算 → 重定向 → clip；先让真实抬手通过渲染验收 | 对话页 + 记忆 JSON + edge-tts |
+### P1 · 核心路径打通：9/22 17:00–24:00（今晚必须出 G2）
 
-### Day 1 下午：它看着你（核心差异）
+| 时间 | A | B | C | D |
+|---|---|---|---|---|
+| 17:00–19:00 | 与 C 跑通真实抬手 clip | 设定图 → 捏人；先交可用版，不等美术完稿 | 解算 → 重定向 → clip | 对话页 + 记忆 JSON + TTS |
+| 19:00–21:00 | ⚠️ **G2：同一 clip 驱动两个角色**（示例 + rough） | 专属 .vrm 参加同一动作集测试 | 让真实抬手通过渲染验收 | 嘴型与表情对接，同时播放动作检查冲突 |
+| 21:00–24:00 | ⚠️ **G3：lookAt 与动作叠加必须跑通** + 眨眼/呼吸 | 调位/光；素材留档 | 首个动作通过后扩展动作库（优先挥手/点头） | 对话环端到端联调 |
 
-| A | B | C | D |
-|---|---|---|---|
-| ⚠️ **lookAt 与动作叠加必须跑通** + 眨眼/呼吸 | 专属 .vrm 通过同一动作集测试；调位/光 | 首个动作通过后扩展动作库，优先挥手/点头/说话手势 | 嘴型与表情对接，同时播放动作检查冲突 |
-
-### Day 2 上午：动捕 + 对话
+### P2 · 动捕扩展 + 对话：9/23 09:00–13:00
 
 | A | B | C | D |
 |---|---|---|---|
-| 状态机接通全部 clip 与对话事件 | 形象微调 + 备选形象（应对"不像"） | clip 裁剪循环 + 平滑；接入状态机 | 记忆演示调通 + **备份视频录制** |
+| 状态机接通全部 clip 与对话事件 | 形象微调 + 备选形象（应对"不像"） | P1 动作补齐到 3 个；clip 裁剪循环 + 平滑；接入状态机 | 记忆演示调通 + **备份视频录制** |
 
-### Day 2 下午：整合与彩排
+### P3 · 整合与门槛：9/23 13:00–17:00
 
 | A | B | C | D |
 |---|---|---|---|
-| 修 bug、保稳定 | 配合彩排 | 配合彩排 | 演示脚本彩排 3 遍（全员） |
+| 修 bug、保稳定，跑 G4/G5 | 配合联调与彩排 | 配合联调与彩排 | 演示脚本成型 |
+
+### P4 · 冻结与交付：9/23 17:00–21:00
+
+| A | B | C | D |
+|---|---|---|---|
+| 17:00 功能冻结，只修阻断级 bug | 配合彩排 | 配合彩排 | 彩排 3 遍（全员）→ 提交 |
+
+**里程碑（倒排）**：G0/G1 ≤ 9/22 17:00 ｜ **G2 ≤ 9/22 21:00** ｜ G3 ≤ 9/22 24:00 ｜ G4 ≤ 9/23 15:00 ｜ G5 ≤ 9/23 17:00 ｜ 备份视频 ≥ 9/23 13:00 ｜ 交付 9/23 晚间
 
 ---
 
@@ -129,10 +142,12 @@ interface CharacterController {
 
 | 时间 | 责任人 | 触发信号 | 对策 |
 |---|---|---|---|
-| Day 1 中午 | B | 形象"不像" | 抓发型/眼镜/主色 3 个标志特征，不纠缠 |
-| Day 1 下午 | A | lookAt 方向错误/反向 | 全员支援；用鼠标模式二分排查镜像与坐标映射（项目最大集成风险） |
-| Day 1 中午 | A/C | 一段真实抬手仍不能正确驱动角色 | 暂停批量录像，用标准骨架程序化动作保住演示链路，并集中排查镜像、坐标系和重定向 |
-| Day 2 中午 | C | 次要 clip 出不来 | 保留已验收动作，其余退化为程序化动画，**状态机和动作契约不变** |
+| 9/22 16:00 | B | 粗版 VRM 出不来 | 直接退回示例 VRM 走完整流程，专属形象只作静态展示 |
+| 9/22 18:00 | B | 形象"不像" | 抓发型/眼镜/主色 3 个标志特征，不纠缠 |
+| 9/22 20:00 | A | lookAt 方向错误/反向 | 全员支援；用鼠标模式二分排查镜像与坐标映射（项目最大集成风险） |
+| 9/22 21:00 | A/C | 一段真实抬手仍不能正确驱动角色 | 暂停批量录像，用标准骨架程序化动作保住演示链路，并集中排查镜像、坐标系和重定向 |
+| 9/23 11:00 | C | 次要 clip 出不来 | 保留已验收动作，其余退化为程序化动画，**状态机和动作契约不变** |
+| 9/23 15:00 | 全员 | G3–G5 任一未过 | 启用备份视频作为主线演示，现场只做轻量交互，不再追新功能 |
 | 全程 | D | 现场网络故障 | 预生成 3 条常见问答音频 + 完整备份视频 |
 | 全程 | D | 现场光线差/追踪丢失 | 演示位补光；切鼠标模式保底 |
 
@@ -141,8 +156,9 @@ interface CharacterController {
 ## 六、待确认事项
 
 1. **技能映射**：谁强前端/Three.js（→A）？谁强 AI 绘图与美术（→B）？谁强 Python/视频处理（→C）？谁强后端/Agent（→D）？
-2. **GPU 资源**：是否有 NVIDIA 独显或云 GPU？有则 B 可并行试 CharacterGen 兜底，无则 VRoid 单线。
-3. **出镜与主讲**：形象与动捕是否同一人？建议出镜人 = 主讲人（叙事最完整），但当天需预留拍摄时间。
+2. **GPU 资源**：已按"不假设有独显"处理——**VRoid 单线**，CharacterGen 兜底在两天赛程内不做；目标机帧率改由 §十一 G5 的自适应门槛验收。
+3. **出镜与主讲**：形象与动捕是否同一人？建议出镜人 = 主讲人（叙事最完整），但 9/23 需预留拍摄时间。
+4. **交付精确时点**：“9/23 晚间”按 20:00 倒排，待组委会给到确切时间后只需微调 §四 的 P4 段。
 
 ---
 
@@ -175,7 +191,8 @@ D：对话/语音 → 状态、表情、嘴型意图 ─────────
 | 产物 | 建议位置 | 内容 |
 |---|---|---|
 | VRoid 源工程 | `assets/vrm/` | 保留可修改源文件 |
-| 运行资产 | `web/public/avatars/companion.vrm` | 与 A/C 验收的是同一导出文件 |
+| 运行资产 | `web/public/avatars/companion.vrm` | 与 A/C 最终验收的是同一导出文件 |
+| 工程粗版 | `web/public/avatars/companion-rough.vrm` | **P0 交付**，仅供 A/C 跑 G0–G2；不带美术细节，单独记哈希，正式资产不得覆盖它 |
 | manifest | `assets/vrm/companion.manifest.json` | 文件哈希、VRM/导出器版本、身高、表情与弹簧骨能力、已知问题 |
 | 验收记录 | `assets/vrm/companion-validation.md` | 使用的动作版本及静态/动态测试结果 |
 
@@ -258,9 +275,11 @@ A 建一个共用调试页，包含角色切换、骨架显示、参考姿态复
 | G2 真实动作 | 真实单侧抬手驱动两个角色 | 同一 clip 直接复用，无反关节、左右交换或持续扭转 | 镜像、Euler 顺序、坐标空间、姿态偏移 |
 | G3 动作合成 | 挥手 + 鼠标注视 + 呼吸 | 手臂动作持续，头眼跟随，切换无跳回 T-pose | mask、重复写入、更新顺序 |
 | G4 表情/次级运动 | 说话 + 开心 + 眨眼 + 转头 | 嘴型持续且结束归零；头发稳定 | expression override、双重更新、delta |
-| G5 稳定性 | 切角色、循环动作、连续对话 10 分钟 | 无崩溃和持续资源增长；目标机稳定 30 fps 以上 | 资源释放、模型负载、重复循环 |
+| G5 稳定性 | 切角色、循环动作、连续对话 10 分钟 | 无崩溃和持续资源增长；帧率按目标机自适应：**≥30 fps 通过 ／ 20–30 fps 需降配（关阴影、降 DPR、限弹簧骨）／ <20 fps 触发 2D 投影兜底** | 资源释放、模型负载、重复循环 |
 
-G1 失败先修资产/渲染；G1 通过而 G2 失败再查动捕重定向。G2 通过前不制作六段精细动作。更换 VRM、rigProfile 或核心依赖后重跑相关门槛。格式可自动校验，关节变形、穿模、左右和动作自然度必须人工看动态画面。
+目标机 = 赛事方提供的机器（GPU 未知）。到场后 30 分钟内跑一次基准并记录到验收页，再据此选择 G5 的档位；不做"假设有独显"的优化。
+
+G1 失败先修资产/渲染；G1 通过而 G2 失败再查动捕重定向。G2 通过前不制作六段精细动作；本赛程下 P2 动作库的默认目标是 **3 个**（挥手/点头/说话手势），P2 级动作只在有余量时补。更换 VRM、rigProfile 或核心依赖后重跑相关门槛。格式可自动校验，关节变形、穿模、左右和动作自然度必须人工看动态画面。
 
 ## 十二、联网论证与实施边界
 
@@ -269,9 +288,17 @@ G1 失败先修资产/渲染；G1 通过而 G2 失败再查动捕重定向。G2 
 - [VRM 1.0 规范：VRMC_vrm](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/README.md)：humanoid 为必需组件；lookAt、expression、spring bone 的应用顺序会影响最终结果。
 - [three-vrm 官方仓库](https://github.com/pixiv/three-vrm)：官方加载示例采用 `GLTFLoader`、`VRMLoaderPlugin`，并在渲染循环调用 `vrm.update(delta)`。
 - [three-vrm VRMHumanoid API](https://pixiv.github.io/three-vrm/docs/classes/three-vrm.VRMHumanoid.html)：`autoUpdateHumanBones` 开启时，update 会把 normalized bones 的姿态同步到 raw bones，为统一动作入口提供依据。
+- [MediaPipe Holistic（本项目实际采用的栈，已 EOL 但版本钉在 0.5.x）](https://www.npmjs.com/package/@mediapipe/holistic)：Kalidokit 的 `Pose.solve`/`Holistic.solve` 只接受该包的输出格式；`tasks-vision` 迁移列为赛后能力。
 - [MediaPipe Pose 官方文档](https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/pose.md)：world landmarks 是以髋中心为原点、单位米的真实世界三维坐标；因此必须显式转换后才能进入场景/重定向逻辑。
 - [Kalidokit 官方仓库](https://github.com/yeemachine/kalidokit)：`Pose.solve` 同时接收 33 个 world 关键点和普通 pose 关键点，并需要指定 runtime；其结果是运动学求解输出，不是 VRM 动画文件。
 
 资料能证明接口与坐标语义，但不能证明某个具体 VRM、浏览器版本和动作样本已经兼容；最终兼容性由 G0–G5 实测确认。项目当前仓库还没有 `web/`、VRM 资产或动作样本，上述路径和验收页属于下一阶段实施任务。
+
+> **2026-09-22 修订（本次改动都在本文档内完成替换，不再另开冲突说明）**
+> 1. 赛程锚定真实日期：Day 1 = 9/22、Day 2 = 9/23、截至 9/23 晚间；§四 原「Day 0 晚 + Day 1 上午」已过期，重压为 P0–P4，并把 G2 硬截止定在 9/22 21:00。
+> 2. `@mediapipe/holistic` **钉 0.5.x**（选项 a）：保留 Kalidokit 兼容性，不迁移 `tasks-vision`；同时模型/WASM 改本地化，禁用 CDN 直连。
+> 3. 版本冻结从"只有 A 锁版本"扩到**四份清单**（§三.4），与 §九.1.4"固定 runtime 和版本"对齐。
+> 4. G5 由"目标机 30 fps"改为**按目标机自适应的三档门槛**（§十一），并在到场后 30 分钟内实测定档。
+> 5. 新增工程粗版资产 `companion-rough.vrm`（§八），与正式 `companion.vrm` 分离并各自记哈希，避免 A/C 的 G0–G2 验收对象歧义。
 
 最终演示验收：**专属 VRM 在实际窗口中播放至少三个已验证动作，同时正确注视用户并完成语音嘴型；示例 VRM 能复用同一组动作，切换时无需重录或逐角色修改动作。** 精确手指、脚底锁定、走路根运动、复杂手脸接触和任意第三方 VRM 兼容列为赛后能力。

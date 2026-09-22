@@ -1,0 +1,8 @@
+.pdfbuild/raw.md
+.pdfbuild/raw.html
+.pdfbuild/proposal.html
+.pdfbuild/*.pdf
+.pdfbuild/*.png
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.pdfbuild/t*.html
