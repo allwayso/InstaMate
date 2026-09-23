@@ -38,6 +38,7 @@ npm run dev
 手动检查可在 `web/` 执行 `npm run sync:mediapipe -- --check`，修复可执行 `npm run sync:mediapipe`。
 
 - **http://localhost:3000** —— 角色工作台（G0/G1：静态渲染、环绕检视、动作播放）
+- **http://localhost:3000/showcase** —— 品牌展示页与 3D 数字人演示
 - **http://localhost:3000/motion-library** —— 动作录入与动作库（G2）
 - **http://localhost:3000/create** —— 照片生成动漫 3D 角色
 - **http://localhost:3000/profiles** —— 聊天 ZIP 解析与人物档案

@@ -52,7 +52,7 @@ const running = new Set();
 async function run(command, args, environment) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, args, {
-      cwd: repo, env: environment, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: repo, env: environment, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     });
     running.add(child);
     let tail = '';
@@ -84,7 +84,7 @@ async function runUntilOutput(command, args, environment, outputPath, timeoutMs)
   const started = Date.now();
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, args, {
-      cwd: repo, env: environment, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: repo, env: environment, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     });
     running.add(child);
     let tail = '';
@@ -132,15 +132,11 @@ process.on('SIGINT', () => { void bail('已放弃'); });
 
 async function main() {
   const job = await readJob();
-  const python = process.env.TRIPO_PYTHON
-    ?? (existsSync(join(repo, 'memory', '.venv', 'bin', 'python'))
-      ? join(repo, 'memory', '.venv', 'bin', 'python') : 'python3');
-  // Windows 上 venv 的解释器在 Scripts\ 下；上面那个 bin/ 是 POSIX 布局。
-  const pythonExe = existsSync(python)
-    ? python
-    : existsSync(join(repo, 'memory', '.venv', 'Scripts', 'python.exe'))
-      ? join(repo, 'memory', '.venv', 'Scripts', 'python.exe')
-      : python;
+  const venvPython = process.platform === 'win32'
+    ? join(repo, 'memory', '.venv', 'Scripts', 'python.exe')
+    : join(repo, 'memory', '.venv', 'bin', 'python');
+  const pythonExe = process.env.TRIPO_PYTHON
+    ?? (existsSync(venvPython) ? venvPython : process.platform === 'win32' ? 'python' : 'python3');
 
   const prompt = [
     'Transform the reference person into a polished anime character.',
@@ -156,6 +152,7 @@ async function main() {
     ...process.env,
     TRIPO_IMAGE_PROMPT: prompt,
     PYTHONUNBUFFERED: '1',
+    PYTHONIOENCODING: 'utf-8',
   };
   const pipeline = join(repo, 'tripo', 'tpose_pipeline.py');
 
