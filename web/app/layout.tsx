@@ -1,9 +1,12 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import './studio.css';
+import { Suspense } from 'react';
+import AppNav from '@/components/app-nav';
 
 export const metadata: Metadata = {
-  title: 'InstaMate 影伴 · 角色调试页',
-  description: 'P0 / A 泳道：静态 VRM 渲染（G0）',
+  title: { default: 'InstaMate 影伴', template: '%s · InstaMate' },
+  description: '创建你的 3D 影伴，通过文字、语音和动作分享日常。',
 };
 
 // 注意：不使用 next/font/google —— 它会在构建期联网拉字体，
@@ -11,7 +14,11 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<'/'>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <a href="#main-content" className="skip-link">跳到主要内容</a>
+        <Suspense fallback={<div className="app-header app-header-placeholder" />}><AppNav /></Suspense>
+        {children}
+      </body>
     </html>
   );
 }

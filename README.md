@@ -23,17 +23,17 @@ cd InstaMate
 # 1) 拉示例 VRM 资产（两个角色，约 22 MB，不进 git，必须这一步）
 node tools/fetch-assets.mjs
 
-# 2) 同步 MediaPipe 本地资源（10 个文件 / 37.78 MB，不进 git，用动作录入必须这一步）
-node tools/sync-mediapipe.mjs
-
-# 3) 装依赖（用 ci 不用 install：保证版本与 lockfile 完全一致）
+# 2) 装依赖（用 ci 不用 install：保证版本与 lockfile 完全一致）
 cd web && npm ci
 
-# 4) 起开发服务器
+# 3) 起开发服务器（自动从已安装依赖同步 MediaPipe 本地资源）
 npm run dev
 ```
 
-- **http://localhost:3000** —— 角色调试台（G0/G1：静态渲染、环绕检视、动作播放）
+开发、构建和生产启动前会自动准备 MediaPipe 的 10 个文件（约 38 MB），无需连接 CDN。
+手动检查可在 `web/` 执行 `npm run sync:mediapipe -- --check`，修复可执行 `npm run sync:mediapipe`。
+
+- **http://localhost:3000** —— 角色工作台（G0/G1：静态渲染、环绕检视、动作播放）
 - **http://localhost:3000/motion-library** —— 动作录入与动作库（G2）
 - **http://localhost:3000/create** —— 照片生成动漫 3D 角色
 - **http://localhost:3000/profiles** —— 聊天 ZIP 解析与人物档案
@@ -51,7 +51,7 @@ cp .env.example .env                 # 填入自己的 OPENAI_API_KEY 等配置
 ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-保持 Python 服务运行，再打开主页下方的「和影伴聊天」。同一浏览器会话刷新后会从
+保持 Python 服务运行，再打开主页的「和影伴聊聊」对话栏。同一浏览器会话刷新后会从
 `memory/memory_data/` 恢复消息。微信聊天 ZIP 可在 `/profiles` 上传，选择目标说话者并
 生成性格与长期记忆，确认档案后点击「用于当前对话」。档案保存在本机
 `memory/profile_data/`，会通过同一聊天接口为文字和语音对话提供背景。原始 ZIP 不保存，
@@ -59,10 +59,10 @@ cp .env.example .env                 # 填入自己的 OPENAI_API_KEY 等配置
 
 **观察操作**：左键拖动旋转 · 右键拖动平移 · Shift + 左键平移 · Shift + 右键旋转 · 滚轮缩放 · 「归位视角」复位。
 
-**G1 动作控件**（右侧面板）：动作选择 · 播放/暂停/继续/停止 · 循环 · 时间轴（拖动即逐帧定位并暂停）·
-骨架辅助线 · 「恢复基础站姿」「参考姿态」· 导入本地 JSON。
+**G1 动作控件**（角色画布下方）：动作选择 · 播放/暂停/继续/停止 · 循环 · 时间轴（拖动即逐帧定位并暂停）。
+展开「角色与动作设置」可查看资产信息、骨架辅助线，使用「恢复基础站姿」「参考姿态」并导入本地 JSON。
 
-**G2 动作录入**（`/motion-library`）：启动摄像头 → 校准 1.5 秒 → 3 秒倒计时 → 录制（最长 10 秒）→
+**G2 动作录入**（`/motion-library`）：启动摄像头 → 预览识别（默认跳过校准，可在高级设置启用）→ 3 秒倒计时 → 录制（最长 10 秒）→
 裁剪 → 校验 → 保存进项目动作库 → 单/双角色回放。详见 `docs/G2-验收记录.md`。
 
 ### 语音与状态库

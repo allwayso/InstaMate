@@ -214,6 +214,9 @@ export class HolisticSession {
 
     this.setStatus('starting', '申请摄像头权限');
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('当前浏览器无法访问摄像头。请使用 localhost 或 HTTPS，并检查浏览器是否支持摄像头。');
+      }
       this.stream = await navigator.mediaDevices.getUserMedia({
         video: this.deviceId
           ? { ...CAPTURE_CONSTRAINTS, deviceId: { exact: this.deviceId } }

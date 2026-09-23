@@ -6,12 +6,20 @@ import type { AvatarJob } from '@/lib/avatar-jobs';
 
 export default function AvatarCreator() {
   const [image, setImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState('');
   const [name, setName] = useState('');
   const [style, setStyle] = useState<AvatarJob['style']>('anime');
   const [jobs, setJobs] = useState<AvatarJob[]>([]);
   const [activeId, setActiveId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!image) { setImagePreview(''); return; }
+    const url = URL.createObjectURL(image);
+    setImagePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [image]);
 
   useEffect(() => {
     void fetch('/api/avatar-jobs').then((response) => response.json())
@@ -61,9 +69,11 @@ export default function AvatarCreator() {
   return (
     <section className="avatar-creator">
       <h2>照片生成动漫角色</h2>
-      <p>上传照片后依次生成动漫 T-pose 参考图、Tripo 3D 模型、绑骨 GLB 与本地 VRM。生成过程会在后台继续运行。</p>
+      <p>照片会先转换为动漫形象，再生成可展示的 3D 角色并保存在本机。提交后可在下方查看进度。</p>
       <div className="avatar-creator-form">
-        <label>人物照片<input type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+        <label className="upload-field"><strong>上传一张人物照片</strong><small>JPG 或 PNG · 清晰的人物照片效果更好</small>
+          {imagePreview && <img className="upload-preview" src={imagePreview} alt="待生成角色的人物照片" />}
+          <input type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png"
           onChange={(event) => setImage(event.target.files?.[0] ?? null)} /></label>
         <label>角色名称<input value={name} onChange={(event) => setName(event.target.value)}
           maxLength={80} placeholder="给角色起个名字" /></label>
@@ -77,12 +87,12 @@ export default function AvatarCreator() {
         </button>
       </div>
       {error && <p className="profile-error" role="alert">{error}</p>}
-      <h3>本地任务</h3>
-      {!jobs.length && <p className="states-muted">尚无生成任务。</p>}
+      <div className="section-heading"><h2>生成记录</h2><span className="section-note">角色会保存在这台设备上</span></div>
+      {!jobs.length && <p className="empty-state">你的第一个影伴，将从这里诞生。选择照片后开始创建。</p>}
       <div className="avatar-jobs">
         {jobs.map((job) => (
           <article key={job.id}>
-            <div><strong>{job.name}</strong><span>{job.stage} · {job.status}</span></div>
+            <div><strong>{job.name}</strong><span>{job.stage} · {{ queued: '等待中', running: '生成中', complete: '已完成', failed: '生成失败' }[job.status]}</span></div>
             {job.preview_url && <img src={job.preview_url} alt={job.name + ' 的动漫 T-pose 参考图'} />}
             {job.error && <p className="profile-error">{job.error}</p>}
             {job.avatar_url && <Link href={'/?avatar=' + encodeURIComponent(job.avatar_url)}>
