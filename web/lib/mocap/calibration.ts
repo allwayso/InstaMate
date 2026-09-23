@@ -130,33 +130,42 @@ export const CALIBRATION_REQUIRED_BONES: readonly RetargetBone[] = [
 export const CALIBRATION_MIN_BONE_CONFIDENCE = 0.5;
 
 /**
- * 修正量的容差（度）。
+ * ★ 修正量大小的**实测参考区间**（度）—— 注意：**它不是门槛**。
  *
- * ★ 这条是为了拦住一个很隐蔽、但破坏力极大的错误：**标定时姿势不对**。
+ * 这里记着一段走错路的历史，因为"看起来很有道理"的判据已经把校准弄坏过一次。
  *
- * 实测踩过：标定时手臂是抬起来的，于是 Qneutral 记的是"抬手姿态"，
- * 而 Qcorrection = Qbase × inverse(Qneutral) 把它映射成基础站姿 ——
- * 结果是**整段偏移被算错**，表现为
- *   · 肘部零点被平移 → 看起来像"肘反了"
- *   · 抬臂的可用范围被偏移吃掉 → "举不过头顶"
- *   · 转头方向也不对
- * 而且这些症状互相矛盾，极难从渲染结果反推原因。
+ * 【当初为什么加门槛】标定时手臂抬起来过，导致 `Qneutral` 记的是"抬手姿态"，
+ * 于是 `Qcorrection = Qbase × Qneutral⁻¹` 把整段偏移算错，表现为"肘反了""举不过
+ * 头顶""转头反了"这类互相矛盾的现象。当时的想法是：**姿势正确时修正量应当很小**，
+ * 所以设了 40° 的容差。
  *
- * 关键线索是：**不加校准反而是对的** —— 说明映射本身没问题，是校准量错了。
+ * 【那个前提是错的】"姿势正确 → 修正量小"只对上臂的 **z 分量**成立
+ * （Kalidokit 静息 ∓1.25 rad vs 我们 ±72°，差 0.38°）。但 `ARM_AXES` 把上臂的
+ * x、y 也映射进来了，而 `rigArm()` 对它们做了非线性变形（乘 PI、减下臂分量、clamp），
+ * 它们的零点并不在"手臂下垂"。于是**合成四元数的模长接近、轴却完全不同**，
+ * 差值被放大到几十度。
  *
- * 为什么能用"修正量大小"当判据：Kalidokit 的静息值与我们的静息值本来就接近
- * （上臂 ∓1.25 rad vs ±72°，差 0.38°；前臂 0 vs 8° 的自然屈肘），
- * 所以**姿势正确时修正量应当很小**。修正量一大，就说明标定姿势偏离了自然站姿。
+ * 【实测：这条判据没有任何分辨力】用真实录制里的手臂比例合成关键点，
+ * 扫描手臂下垂角 0°（水平/T-pose）→ 90°（竖直下垂），跑完整
+ * Kalidokit → retarget → computeCorrections：
+ *
+ *     下垂角    0°    15°    30°    45°    60°    75°    90°
+ *     修正量  77.4°  63.3°  51.1°  43.7°  44.4°  52.9°  88.1°
+ *
+ * **所有角度都超过 40°**，包括正确的那个（90°，88.1°）和错误的那个（0°，77.4°）。
+ * 而当初"抬手标定"那次是 54.8° —— 正好落在正常范围中间。
+ * 也就是说：这条门槛拦不住它想拦的东西，却会拒绝每一次正确校准。
+ *
+ * 【后果】它是一次回归：加入前（2026-09-22 21:00 之前）两次真人录制都校准成功；
+ * 加入后校准永远失败，而提示语还在怪用户"姿势不对"。
+ *
+ * 【现在的做法】只测量、不设门槛 —— 数值作为信息展示（见 CalibrationOutcome），
+ * 让人自己判断。真要自动判别"标定时手抬着"，得换一个有分辨力的信号
+ * （例如 Kalidokit 上臂 z 的原始值：T-pose ≈ 0、自然下垂 ≈ −1.15~−1.25），
+ * 而不是拿合成后的修正量当代理指标。
  */
-export const CALIBRATION_MAX_CORRECTION_DEG = 40;
+export const CALIBRATION_CORRECTION_OBSERVED_DEG = { min: 43, max: 89 } as const;
 
-/**
- * 参与容差检查的骨骼。
- *
- * 容差取 40°：足以拦住"抬着手标定"（实测抬手 55° → 修正量 54.8°），
- * 又不会对"Kalidokit 的头部零点本来就不在正前方"这类正常差异过敏。
- * 参考值（实测）：自然站姿下上臂 0.38°、前臂 8.00°（我们的自然屈肘）。
- */
 const CORRECTION_CHECKED_BONES = [
   'rightUpperArm',
   'leftUpperArm',
@@ -189,7 +198,10 @@ export interface CalibrationOutcome {
   acceptedFrames: number;
   totalFrames: number;
   durationMs: number;
-  /** 修正量的最大旋转角（度）。姿势正确时应当很小（上臂约 0.4°） */
+  /**
+   * 修正量的最大旋转角（度）。**仅供展示**，不参与通过判定 ——
+   * 正常自然站姿下它本来就在 43–89°，见 CALIBRATION_CORRECTION_OBSERVED_DEG。
+   */
   maxCorrectionDeg: number;
   /** 修正量最大的骨骼名 */
   worstBone: string;
@@ -297,7 +309,8 @@ export class CalibrationSession {
 
     const corrections = accepted.length ? computeCorrections(neutralPose) : {};
 
-    // ★ 校准可信度自检：修正量过大说明标定姿势不是自然站姿
+    // 只测量、不判定。上限见 CALIBRATION_CORRECTION_OBSERVED_DEG 的说明 ——
+    // 「修正量大 = 姿势不对」这个前提不成立，所以这里**刻意不加 issues**。
     let maxCorrectionDeg = 0;
     let worstBone = '';
     for (const b of CORRECTION_CHECKED_BONES) {
@@ -308,14 +321,6 @@ export class CalibrationSession {
         maxCorrectionDeg = deg;
         worstBone = b;
       }
-    }
-    if (accepted.length && maxCorrectionDeg > CALIBRATION_MAX_CORRECTION_DEG) {
-      issues.push(
-        `校准姿态偏离自然站姿过多（${worstBone} 的修正量 ${maxCorrectionDeg.toFixed(1)}°，` +
-          `容差 ${CALIBRATION_MAX_CORRECTION_DEG}°）。` +
-          `校准时应**双臂自然下垂、目视前方**，不要举手或转头 ——` +
-          `标定姿势不对会让整段偏移算错，表现为"肘反了""举不过头顶""转头反了"这类互相矛盾的现象。`,
-      );
     }
 
     const ok = issues.length === 0;

@@ -39,6 +39,7 @@ import {
   CalibrationSession,
   applyCalibration,
   type CalibrationOutcome,
+  CALIBRATION_CORRECTION_OBSERVED_DEG,
 } from '@/lib/mocap/calibration';
 import { PoseSmoother, computeBoneConfidence, isBodyTracked } from '@/lib/mocap/smoothing';
 import { RecordingSession, type RecordingOutcome } from '@/lib/mocap/recording';
@@ -876,7 +877,7 @@ export default function MotionLibraryPage() {
             {calibration && (
               <div className={calibration.ok ? 'ok' : 'bad'}>
                 {calibration.ok
-                  ? `校准通过｜检测率 ${(calibration.detectionRate * 100).toFixed(1)}%｜帧 ${calibration.acceptedFrames}/${calibration.totalFrames}｜修正量 ${calibration.maxCorrectionDeg.toFixed(1)}°（${calibration.worstBone}）`
+                  ? `校准通过｜检测率 ${(calibration.detectionRate * 100).toFixed(1)}%｜帧 ${calibration.acceptedFrames}/${calibration.totalFrames}｜修正量 ${calibration.maxCorrectionDeg.toFixed(1)}°（${calibration.worstBone}，正常范围 ${CALIBRATION_CORRECTION_OBSERVED_DEG.min}–${CALIBRATION_CORRECTION_OBSERVED_DEG.max}°）`
                   : `未通过：${calibration.issues.join('；')}`}
               </div>
             )}
