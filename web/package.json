@@ -21,11 +21,13 @@
   "dependencies": {
     "@mediapipe/holistic": "0.5.1675471629",
     "@pixiv/three-vrm": "3.5.5",
+    "@types/ws": "^8.18.1",
     "kalidokit": "1.1.5",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "three": "0.186.0"
+    "three": "0.186.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "24.13.6",
