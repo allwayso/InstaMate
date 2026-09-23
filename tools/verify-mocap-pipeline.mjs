@@ -282,9 +282,15 @@ for (let i = 0; i < 90; i++) {
   camState = await ev('__mocapDebug.getState()');
   camDetail = await ev(`document.querySelector('.camera-status .badge')?.textContent ?? ''`);
   sawError = await ev(`document.querySelector('.camera-error pre')?.textContent ?? ''`);
-  if (camState === 'detecting' || camState === 'error') break;
+  // ★ 默认「跳过校准」时摄像头一起来就直接进 ready（不再停在 detecting）；
+  //   关掉跳过开关才是 detecting。两者都算启动成功。
+  if (camState === 'ready' || camState === 'detecting' || camState === 'error') break;
 }
-check('摄像头启动成功（假设备）', camState === 'detecting', `state=${camState} ${camDetail}`);
+check(
+  '摄像头启动成功（假设备）',
+  camState === 'ready' || camState === 'detecting',
+  `state=${camState} ${camDetail}（默认跳过校准 ⇒ 直接 ready）`,
+);
 if (sawError) {
   check('若失败，错误信息是具体的（不是静默）', sawError.length > 10, sawError.slice(0, 90));
 }
@@ -327,6 +333,31 @@ await ev(`(() => {
   btn?.click();
   return !!btn;
 })()`);
+// ── 8. ★ 校准开关：默认跳过 ⇒ 无需校准即可录制；打开校准 ⇒ 走原闸门 ──────
+const tog = `document.querySelector('.skip-calibration input[type=checkbox]')`;
+const hasToggle = await ev(`!!${tog}`);
+check('★ 有「跳过校准」开关', hasToggle === true, hasToggle ? '存在' : '找不到 .skip-calibration');
+check('★ 默认跳过校准（实测：修正量不能泛化，校准反而更偏）', (await ev(`${tog}.checked`)) === true);
+
+const recDisabled = await ev(`(() => {
+  const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('开始录制'));
+  return btn ? btn.disabled : null;
+})()`);
+check('★ 跳过校准时不要求"校准通过"即可录制', recDisabled === false, `disabled=${recDisabled}`);
+
+// 打开校准 → 应退回 detecting，且录制被拦住（原计划的闸门仍然有效）
+await ev(`${tog}.click()`);
+await sleep(1200);
+const stateAfterSkip = await ev('__mocapDebug.getState()');
+const recDisabled2 = await ev(`(() => {
+  const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('开始录制'));
+  return btn ? btn.disabled : null;
+})()`);
+check('★ 打开校准后退回 detecting', stateAfterSkip === 'detecting', `state=${stateAfterSkip}`);
+check('★ 打开校准后「开始录制」被拦住（原闸门仍有效）', recDisabled2 === true, `disabled=${recDisabled2}`);
+
+// 顺手验一次「校准会被明确拒绝」——现在要手动触发
+await ev(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('校准（1.5 秒）'))?.click()`);
 let calibText = '';
 for (let i = 0; i < 20; i++) {
   await sleep(600);
@@ -339,12 +370,6 @@ check(
   calibText.slice(0, 100),
 );
 
-// ── 8. 录制按钮应被拦住（没校准成功不允许录）────────────────────────────
-const recDisabled = await ev(`(() => {
-  const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('开始录制'));
-  return btn ? btn.disabled : null;
-})()`);
-check('★ 未校准成功时「开始录制」被禁用（计划："校准成功后允许录制"）', recDisabled === true, `disabled=${recDisabled}`);
 const camInfo = await ev('__mocapDebug.getCameraInfo()');
 if (camInfo) {
   console.log(
