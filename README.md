@@ -34,6 +34,7 @@ npm run dev
 ```
 
 - **http://localhost:3000** —— 角色调试台（G0/G1：静态渲染、环绕检视、动作播放）
+- **http://localhost:3000/showcase** —— 双屏展示页（品牌首屏与 3D 数字人旋转页，使用 `compat.vrm` 示例角色）
 - **http://localhost:3000/motion-library** —— 动作录入与动作库（G2）
 - **http://localhost:3000/create** —— 照片生成动漫 3D 角色
 - **http://localhost:3000/profiles** —— 聊天 ZIP 解析与人物档案

@@ -1,0 +1,224 @@
+.page {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scroll-snap-type: y mandatory;
+  background: #142026;
+  color: #fff;
+}
+
+.hero,
+.modelSection {
+  position: relative;
+  min-height: 100dvh;
+  scroll-snap-align: start;
+}
+
+.hero {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  isolation: isolate;
+  background: #111820;
+}
+
+.heroBackdrop {
+  position: absolute;
+  z-index: -2;
+  inset: -4%;
+  background-image:
+    linear-gradient(180deg, rgb(11 17 25 / 54%) 0%, rgb(11 17 25 / 50%) 42%, rgb(11 17 25 / 74%) 100%),
+    url('/images/showcase-memory.png');
+  background-position: center;
+  background-size: cover;
+  animation: backgroundDrift 24s ease-in-out infinite alternate;
+}
+
+.hero::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 15%, rgb(8 14 21 / 45%) 100%);
+  content: '';
+  pointer-events: none;
+}
+
+.header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  height: 88px;
+  padding: 0 clamp(24px, 5vw, 72px);
+}
+
+.wordmark {
+  color: #fff;
+  font-family: Arial, "Segoe UI", sans-serif;
+  font-size: clamp(24px, 2.1vw, 30px);
+  font-weight: 750;
+  letter-spacing: -.055em;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.wordmark:focus-visible,
+.scrollPrompt:focus-visible {
+  outline: 2px solid #a7f1d1;
+  outline-offset: 8px;
+}
+
+.heroContent {
+  width: min(100% - 48px, 940px);
+  padding: 94px 0 112px;
+  text-align: center;
+}
+
+.heroContent h1 {
+  margin: 0;
+  font-size: clamp(56px, 6.4vw, 88px);
+  font-weight: 700;
+  letter-spacing: -.055em;
+  line-height: 1.18;
+  text-wrap: balance;
+  text-shadow: 0 2px 24px rgb(4 8 14 / 24%);
+}
+
+.heroContent p {
+  max-width: 710px;
+  margin: 30px auto 0;
+  color: #edf1f4;
+  font-size: clamp(16px, 1.55vw, 21px);
+  line-height: 1.8;
+  text-wrap: pretty;
+  text-shadow: 0 1px 18px rgb(4 8 14 / 60%);
+}
+
+.scrollPrompt {
+  position: absolute;
+  bottom: clamp(52px, 10vh, 90px);
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 8px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  text-decoration: none;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  transition: color 180ms ease;
+}
+
+.scrollPrompt:hover {
+  color: #a7f1d1;
+}
+
+.downArrow {
+  position: relative;
+  width: 18px;
+  height: 24px;
+  border-left: 1.5px solid currentColor;
+  margin-left: 9px;
+}
+
+.downArrow::after {
+  position: absolute;
+  left: -6px;
+  bottom: 1px;
+  width: 11px;
+  height: 11px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  content: '';
+  transform: rotate(45deg);
+}
+
+.modelSection {
+  overflow: hidden;
+  background: #142026;
+}
+
+.avatarStage,
+.avatarCanvas {
+  position: absolute;
+  inset: 0;
+}
+
+.avatarCanvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.avatarStatus {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 32px;
+  color: #d1e5de;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+@keyframes backgroundDrift {
+  from { transform: scale(1) translate3d(-.6%, 0, 0); }
+  to { transform: scale(1.06) translate3d(.6%, -.6%, 0); }
+}
+
+@media (max-width: 680px) {
+  .header {
+    height: 72px;
+  }
+
+  .heroBackdrop {
+    background-position: 55% center;
+  }
+
+  .heroContent {
+    width: min(100% - 40px, 520px);
+    padding: 72px 0 115px;
+  }
+
+  .heroContent h1 {
+    font-size: clamp(45px, 9vw, 64px);
+  }
+
+  .heroContent p {
+    margin-top: 24px;
+    font-size: 16px;
+    line-height: 1.8;
+  }
+
+  .scrollPrompt {
+    bottom: 60px;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page {
+    scroll-behavior: auto;
+  }
+
+  .heroBackdrop {
+    animation: none;
+  }
+
+  .scrollPrompt {
+    transition: none;
+  }
+}
