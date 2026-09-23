@@ -140,6 +140,18 @@ export default function MotionLibraryPage() {
   const calibrationRef = useRef<CalibrationSession | null>(null);
   const recordingRef = useRef<RecordingSession | null>(null);
   const correctionsRef = useRef<Pose | null>(null);
+  /**
+   * ★ 是否跳过校准。**默认开**。
+   *
+   * 实测：修正量**不能泛化** —— 用 90°（自然下垂）标定后，0°（T-pose）会被映射到
+   * 偏离 identity 108° 的位置。也就是说这套修正量只让"标定那一帧"变准，
+   * 其它姿态反而更偏。用户的实机观察与此一致："没有校准的时候人物跟随反而是对的"。
+   *
+   * 所以默认跳过。校准通路完整保留（关掉这个开关即可），等上臂 x/y 的轴映射
+   * 按真人逐条实测修好之后再切回默认开启。
+   */
+  const [skipCalibration, setSkipCalibration] = useState(true);
+  const skipCalibrationRef = useRef(true);
   const lastFrameAtRef = useRef(0);
   const previewRef = useRef<MocapPreviewHandle | null>(null);
   const cameraRef = useRef<CameraCaptureHandle | null>(null);
@@ -382,6 +394,29 @@ export default function MotionLibraryPage() {
   );
 
   // ── 校准 ─────────────────────────────────────────────────────────────
+
+  /** 开/关校准。关掉时必须作废旧修正量，否则等于把偏移又叠回去。 */
+  const toggleSkipCalibration = useCallback(
+    (on: boolean) => {
+      skipCalibrationRef.current = on;
+      setSkipCalibration(on);
+      correctionsRef.current = null;
+      setCalibration(null);
+      smootherRef.current?.reset();
+      const camOn = stateRef.current !== 'camera-off' && stateRef.current !== 'loading-model';
+      if (camOn && ['detecting', 'ready', 'calibrating'].includes(stateRef.current)) {
+        setStateBoth(on ? 'ready' : 'detecting');
+      }
+      setNotice({
+        kind: 'info',
+        text: on
+          ? '已跳过校准：直接用重定向的原始输出驱动角色（实测这条更准）'
+          : '已开启校准：请保持自然站姿点「校准（1.5 秒）」',
+      });
+    },
+    [setStateBoth],
+  );
+
   const startCalibration = useCallback(() => {
     const cal = new CalibrationSession();
     cal.start(performance.now());
@@ -432,7 +467,7 @@ export default function MotionLibraryPage() {
   }, [setStateBoth]);
 
   const beginCountdown = useCallback(() => {
-    if (!correctionsRef.current) {
+    if (!skipCalibrationRef.current && !correctionsRef.current) {
       setNotice({ kind: 'warn', text: '请先完成校准' });
       return;
     }
@@ -747,8 +782,8 @@ export default function MotionLibraryPage() {
    * 是因为禁用 + tooltip 能让人一眼看出缺哪一步，而弹提示需要先点错一次。
    */
   const calibrated = calibration?.ok === true;
-  const canRecord = state === 'ready' && calibrated;
-  const recordHint = !calibrated
+  const canRecord = state === 'ready' && (skipCalibration || calibrated);
+  const recordHint = !skipCalibration && !calibrated
     ? '需要先完成校准：点上方「校准（1.5 秒）」，保持自然站姿'
     : state !== 'ready'
       ? `当前状态：${STATE_LABEL[state]}`
@@ -804,7 +839,8 @@ export default function MotionLibraryPage() {
               //   表现为"徽章一直显示加载中"，而实际上摄像头已经跑起来了。
               //   （这个 bug 是预检脚本抓出来的，真人上场时会立刻撞到。）
               const notStarted = stateRef.current === 'camera-off' || stateRef.current === 'loading-model';
-              if (s === 'running' && notStarted) setStateBoth('detecting');
+              // 跳过校准时不要求"校准通过"才就绪 —— 摄像头一跑起来就能录
+              if (s === 'running' && notStarted) setStateBoth(skipCalibrationRef.current ? 'ready' : 'detecting');
               else if (s === 'starting' && stateRef.current === 'camera-off') setStateBoth('loading-model');
               else if (s === 'error') setStateBoth('error');
               else if (s === 'stopped') setStateBoth('camera-off');
@@ -866,7 +902,28 @@ export default function MotionLibraryPage() {
           <h2>录制流程</h2>
 
           <div className="calibration-box">
-            <button type="button" onClick={startCalibration} disabled={state === 'recording' || busy}>
+            <label
+              className="skip-calibration"
+              title="实测：修正量不能泛化 —— 标定那一帧变准、其它姿态反而更偏。所以默认跳过校准。"
+            >
+              <input
+                type="checkbox"
+                checked={skipCalibration}
+                onChange={(e) => toggleSkipCalibration(e.target.checked)}
+              />
+              跳过校准（默认，实测更准）
+            </label>
+            {skipCalibration && (
+              <div className="hint">
+                当前：<strong>未校准</strong> —— 角色直接跟随重定向输出。修正量只让标定那一帧变准，
+                其它姿态反而更偏（实测：用 90° 自然下垂标定后，T-pose 会被映射到偏离 identity 108°）。
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={startCalibration}
+              disabled={state === 'recording' || busy || skipCalibration}
+            >
               校准（1.5 秒）
             </button>
             {state === 'calibrating' && (

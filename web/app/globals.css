@@ -458,8 +458,12 @@ main {
 .record-box { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .calibration-box progress { width: 140px; }
 .calibration-box .ok { color: #9be8bd; }
+.calibration-box .hint { flex-basis: 100%; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .calibration-box .bad { color: #ffb3b8; }
 .swap-toggle { display: flex; align-items: center; gap: 4px; margin-left: auto; cursor: pointer; }
+/* 「跳过校准」开关：默认勾选、且是当前推荐状态，所以给一点视觉重量 */
+.skip-calibration { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 600; }
+.skip-calibration input { accent-color: #7fd1a6; }
 
 .countdown { font-size: 26px; font-weight: 700; color: #ffe08a; margin-left: 8px; }
 .rec-live { display: flex; gap: 12px; align-items: center; color: #ffb3b8; }
