@@ -39,9 +39,15 @@ export interface BuildClipOptions {
   name: string;
   /** 已处理（校准 + 平滑 + 回退）的姿态帧，按时间升序 */
   frames: readonly RecordedFrame[];
-  /** 裁剪入点（毫秒，相对录制起点） */
+  /**
+   * 裁剪入点（毫秒，**相对录制起点**）。
+   *
+   * ★ `frames[].timestampMs` 可能是绝对时刻（页面传的是 performance.now()），
+   * 本函数内部会以 `frames[0].timestampMs` 为原点到帧的坐标系上，
+   * 所以调用方一律用相对毫秒，不要自己换算。
+   */
   inMs: number;
-  /** 裁剪出点（毫秒，相对录制起点） */
+  /** 裁剪出点（毫秒，相对录制起点）。口径同 `inMs`。 */
   outMs: number;
   fps?: number;
   loop?: boolean;
@@ -196,11 +202,26 @@ export function buildClip(opts: BuildClipOptions): BuildClipResult {
   if (bones.length === 0) return fail('BUILD_NO_BONES', '所有帧都没有骨骼轨道');
 
   // ── 重采样 ───────────────────────────────────────────────────────────
+  //
+  // ★ 必须把「相对时刻」换算到帧自己的时间戳口径上。
+  //
+  // `inMs`/`outMs` 的契约是**相对录制起点**（裁剪 UI 用的就是这个口径），
+  // 而 `RecordedFrame.timestampMs` 是**绝对时刻** —— 页面传的是
+  // `frame.timestampMs`，也就是 `performance.now()`，量级是几十万毫秒。
+  //
+  // 直接把相对值喂进 samplePoseAt 的后果：`t ∈ [0, outMs]` 永远 ≤
+  // `frames[0].timestampMs`，于是它的边界分支**每一帧都返回第 0 帧的姿态**，
+  // 整段 clip 变成一张静止照片，而且帧数与时长都对、校验也全过。
+  //
+  // 这个 bug 在生产路径上活了很久：三次真人录制（4.13s / 10.03s / 4.6s）
+  // 全部产出 0.0000° 变化的 clip，而单元测试全绿 —— 因为夹具用的是
+  // 0/25/50… 这种小时间戳，恰好落在"两种口径重合"的区间里。
+  const t0 = frames[0]?.timestampMs ?? 0;
   const tracks: Record<string, QuaternionTuple[]> = {};
   for (const b of bones) tracks[b] = [];
 
   for (let i = 0; i < frameCount; i++) {
-    const t = inMs + i * stepMs;
+    const t = t0 + inMs + i * stepMs;
     const pose = samplePoseAt(frames, t, bones);
     for (const b of bones) {
       const q = pose[b];
