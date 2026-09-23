@@ -654,6 +654,41 @@ export default function MotionLibraryPage() {
     [entries],
   );
 
+  /**
+   * 删除一条动作。
+   *
+   * 服务端会**同时清掉原始关键点**（data/mocap/*.landmarks.json，单段 5–10MB）。
+   *
+   * 删完必须**重新拉目录**，不能在本地把这条过滤掉：目录是服务端写的真相源，
+   * 本地过滤会让"服务端其实没删成功"这种情况在界面上表现得像成功了。
+   */
+  const handleDelete = useCallback(async (id: string, name: string) => {
+    try {
+      const res = await fetch(`/api/motion-library/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        removed?: string[];
+        failed?: string[];
+      };
+      if (!res.ok) {
+        setNotice({ kind: 'error', text: `删除失败（HTTP ${res.status}）：${data.error ?? '未知原因'}` });
+        return;
+      }
+      setEntries(await fetchCatalog());
+      setSelectedId((cur) => (cur === id ? '' : cur));
+      const orphan = data.failed?.length ?? 0;
+      setNotice({
+        kind: orphan > 0 ? 'warn' : 'info',
+        text:
+          `已删除「${name}」` +
+          (data.removed?.length ? `，清掉 ${data.removed.length} 个文件` : '') +
+          (orphan > 0 ? `；有 ${orphan} 个文件没删掉（孤儿文件，不影响使用，可再删一次）` : ''),
+      });
+    } catch (e) {
+      setNotice({ kind: 'error', text: `删除失败：${e instanceof Error ? e.message : e}` });
+    }
+  }, []);
+
   const handleImport = useCallback(
     async (file: File) => {
       const res = await importClipFromFile(file, entries, HUMAN_BONES);
@@ -1081,6 +1116,7 @@ export default function MotionLibraryPage() {
               if (e) download(e.url, `${id}.json`);
             }}
             onDownloadLandmarks={(id) => download(`/api/motion-library/${id}/landmarks`, `${id}.landmarks.json`)}
+            onDelete={handleDelete}
             onImport={handleImport}
             landmarksAvailable={(id) => Boolean(entries.find((e) => e.id === id)?.captureId)}
           />
