@@ -87,7 +87,7 @@ MODEL_NAME 配为支持工具调用的模型，例如 qwen-max。
 
 ### 照片创建角色
 
-在 `web/.env.local` 填入 `TRIPO_API_KEY`，或在 `tripo/.env` 中配置同名变量；
+打开网页「创建角色」，在「Tripo 服务设置」中填写 API Key 和 API 地址并测试连接。配置会保存在本机的 `tripo/.env`，无需重启网页。也可以在 `web/.env.local` 填入 `TRIPO_API_KEY`，或手动在 `tripo/.env` 中配置同名变量；
 本机 Python 还需安装 `tripo/requirements.txt`，或者用 `TRIPO_PYTHON` 指向已有依赖的解释器。
 打开 `/create` 上传 JPG/PNG 照片并填写名称。后台按「动漫 T-pose 参考图 → Tripo 建模和贴图
 → 自动绑骨 GLB → 本地 VRM 转换与校验」执行。任务记录和原图默认在 `data/avatar-jobs/`，

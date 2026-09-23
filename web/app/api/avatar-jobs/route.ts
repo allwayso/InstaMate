@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { NextResponse } from 'next/server';
 import { avatarJobDir, listAvatarJobs, type AvatarJob } from '@/lib/avatar-jobs';
 import { localRequestOnly } from '@/lib/local-request';
+import { getTripoConfig } from '@/lib/tripo-settings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,9 +20,10 @@ export async function POST(request: Request) {
   const gate = localRequestOnly(request);
   if (gate) return gate;
   const repo = resolve(process.cwd(), '..');
-  if (!process.env.TRIPO_API_KEY && !existsSync(join(repo, 'tripo', '.env'))) {
-    return NextResponse.json({ error: '请先配置 TRIPO_API_KEY（环境变量或 tripo/.env）' }, { status: 503 });
-  }
+  let tripo;
+  try { tripo = await getTripoConfig(); }
+  catch { return NextResponse.json({ error: 'Tripo API 地址不正确，请打开本页的服务设置' }, { status: 503 }); }
+  if (!tripo.key) return NextResponse.json({ error: '请先在本页的 Tripo 服务设置中填写 API Key' }, { status: 503 });
   if (Number(request.headers.get('content-length')) > 21_000_000) {
     return NextResponse.json({ error: '图片不能超过 20 MB' }, { status: 413 });
   }
@@ -53,7 +54,8 @@ export async function POST(request: Request) {
     };
     await writeFile(join(dir, 'job.json'), JSON.stringify(job, null, 2));
     const child = spawn(process.execPath, [join(repo, 'tools', 'avatar-job.mjs'), id], {
-      cwd: repo, env: process.env, detached: true, stdio: 'ignore',
+      cwd: repo, env: { ...process.env, TRIPO_API_KEY: tripo.key, TRIPO_BASE_URL: tripo.baseUrl },
+      detached: true, stdio: 'ignore',
     });
     await new Promise<void>((done, failed) => {
       child.once('spawn', done);
