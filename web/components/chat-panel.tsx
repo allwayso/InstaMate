@@ -180,6 +180,20 @@ export default function ChatPanel() {
     setSessionId(id);
   }
 
+  function selectProfile(nextProfileId: string) {
+    stopSpeaking();
+    setProfileId(nextProfileId);
+    if (nextProfileId) localStorage.setItem(PROFILE_STORAGE_KEY, nextProfileId);
+    else localStorage.removeItem(PROFILE_STORAGE_KEY);
+    const id = newSessionId();
+    localStorage.setItem(STORAGE_KEY, id);
+    setSessionId(id);
+    setMessages([]);
+    setDraft('');
+    setError('');
+    window.dispatchEvent(new Event(PROFILE_CHANGE_EVENT));
+  }
+
   async function finishRecording() {
     const recorder = recorderRef.current;
     if (!recorder || recordingBusyRef.current) return;
@@ -249,13 +263,7 @@ export default function ChatPanel() {
       <div className="chat-panel-head">
         <div><span className="eyebrow">一段新的日常</span><h2>和影伴聊聊</h2>
           <label className="chat-profile">人物档案
-            <select value={profileId} onChange={(event) => {
-              const next = event.target.value;
-              setProfileId(next);
-              if (next) localStorage.setItem(PROFILE_STORAGE_KEY, next);
-              else localStorage.removeItem(PROFILE_STORAGE_KEY);
-              window.dispatchEvent(new Event(PROFILE_CHANGE_EVENT));
-            }}>
+            <select value={profileId} onChange={(event) => selectProfile(event.target.value)}>
               <option value="">默认影伴</option>
               {profiles.map((profile) => <option key={profile.profile_id} value={profile.profile_id}>
                 {profile.target_speaker}
