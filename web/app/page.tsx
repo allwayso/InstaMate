@@ -13,6 +13,9 @@
  * 否则 undefined → url 会触发两次加载（display-case 的加载 effect 依赖 [src]）。
  */
 import dynamic from 'next/dynamic';
+import ChatPanel from '@/components/chat-panel';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
 
 const DisplayCase = dynamic(() => import('@/components/display-case'), {
   ssr: false,
@@ -27,17 +30,23 @@ function readAvatarParam(): string | undefined {
 
 export default function Page() {
   const avatar = readAvatarParam();
+  const [statesHref, setStatesHref] = useState('/states');
+  useEffect(() => {
+    setStatesHref(avatar ? '/states?avatar=' + encodeURIComponent(avatar) : '/states');
+  }, [avatar]);
 
   return (
     <main>
       <header className="page-head">
         <h1>InstaMate 影伴 · 角色调试页</h1>
         <p>
-          P0 / A 泳道 —— 本轮范围：<strong>静态 VRM 渲染</strong>（G0）。
-          注视、程序化抬手、动作库为下一步。
+          检视 3D 角色、播放动作，并和拥有会话记忆的影伴对话。
+          <Link href="/create">上传照片创建角色</Link>
+          <Link href={statesHref}>管理状态库</Link><Link href="/profiles">导入聊天记忆</Link>
         </p>
       </header>
       <DisplayCase src={avatar} />
+      <ChatPanel />
     </main>
   );
 }

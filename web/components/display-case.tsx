@@ -29,6 +29,7 @@ import type { Pose } from '@/lib/pose';
 import { HUMAN_BONES_VRM1 as HUMAN_BONES } from '@/lib/contracts';
 import type { VrmCapabilities } from '@/lib/contracts';
 import AvatarSelect from '@/components/avatar-select';
+import { getActiveState, onStateChange, type ActiveState } from '@/lib/state-events';
 
 const DEFAULT_AVATAR = '/avatars/sample.vrm';
 
@@ -97,6 +98,26 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
     let loaded: LoadedVrm | null = null;
     let runtime: CharacterRuntime | null = null;
     let player: ClipPlayer | null = null;
+
+    const playState = (state: ActiveState | null) => {
+      if (!state) {
+        player?.stop();
+        return;
+      }
+      if (!state.clipId) {
+        setClipError(`状态「${state.name}」尚未绑定动作库 clip`);
+        return;
+      }
+      const clip = clipsRef.current.get(state.clipId);
+      if (!clip || !player) return; // 模型或目录仍在加载；加载结束后补播当前状态
+      setSelectedId(state.clipId);
+      setClipError(null);
+      void player.play(clip, { loop: state.loop, fadeIn: 0.15 }).catch((error: unknown) => {
+        if (error instanceof Error && error.name === 'ClipPlaybackCancelledError') return;
+        setClipError(error instanceof Error ? error.message : String(error));
+      });
+    };
+    const unsubscribeState = onStateChange(playState);
 
     const width = mount.clientWidth || 960;
     const height = mount.clientHeight || 640;
@@ -310,6 +331,7 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
             if (!cancelled) {
               setCatalog(valid);
               if (valid.length > 0) setSelectedId(valid[0].id);
+              playState(getActiveState());
             }
           } catch (e) {
             if (!cancelled) setClipError(e instanceof Error ? e.message : String(e));
@@ -475,6 +497,7 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
 
     return () => {
       cancelled = true;
+      unsubscribeState();
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKeyDown);
@@ -724,4 +747,3 @@ function buildTargetBones(missingBones: readonly string[]): readonly string[] {
   // 与 tools/validate-clip.mjs 的 --target 同一算法：规范表减去缺失项
   return HUMAN_BONES.filter((b) => !missing.has(b));
 }
-

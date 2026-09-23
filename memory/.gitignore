@@ -1,0 +1,11 @@
+.env*
+!.env.example
+!.env.*.example
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+memory_data/
+analysis_output/
+chat_archives/
+profile_data/
