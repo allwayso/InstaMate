@@ -22,6 +22,23 @@ export interface ClipCatalogEntry {
   mask: string[];
   /** 仅会话内有效的导入动作 */
   sessionOnly?: boolean;
+
+  // ── G2 录制元数据（可选）───────────────────────────────────────────
+  // 全部可选，且**缺失时显示为「—」而不是 0**：
+  // 0% 跟踪有效率是一个有意义的值，和“没有这个信息”必须能区分开。
+
+  /** 创建时间（ISO 8601） */
+  createdAt?: string;
+  /** 录制时的跟踪有效率（0–1）。imported 来源没有这个字段 */
+  trackingValidRatio?: number;
+  /** 对应的原始采集 id；没存原始关键点的动作（例如导入）为 null */
+  captureId?: string | null;
+  /** 录制时的推理帧率均值 */
+  inferenceFpsMean?: number;
+  /** 最长跟踪丢失段（毫秒） */
+  longestTrackingGapMs?: number;
+  /** 录制质量警告（例如存在 >500ms 的丢失段） */
+  qualityWarnings?: string[];
 }
 
 export interface CatalogFile {

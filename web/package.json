@@ -11,11 +11,17 @@
     "validate:fixtures": "node ../tools/validate-clip.mjs --fixtures ../tests/fixtures",
     "inspect:vrm": "node ../tools/inspect-vrm.mjs public/avatars/sample.vrm",
     "test:clip": "node --test --test-reporter=spec ../tests/clip-player.test.mjs",
+    "test:mocap": "node --test --test-reporter=spec ../tests/mocap-retarget.test.mjs ../tests/mocap-clipbuilder.test.mjs",
+    "test": "node --test \"../tests/*.test.mjs\"",
     "gen:clips": "node ../tools/gen-clips.mjs",
-    "validate:all": "node ../tools/validate-clip.mjs --all public/clips"
+    "sync:mediapipe": "node ../tools/sync-mediapipe.mjs",
+    "validate:all": "node ../tools/validate-clip.mjs --all public/clips",
+    "verify:pipeline": "node ../tools/verify-mocap-pipeline.mjs"
   },
   "dependencies": {
+    "@mediapipe/holistic": "0.5.1675471629",
     "@pixiv/three-vrm": "3.5.5",
+    "kalidokit": "1.1.5",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",
