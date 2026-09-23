@@ -84,7 +84,16 @@ def test_chat_api_saves_and_recovers_session_without_model_network(tmp_path: Pat
         history_messages_key="history",
     )
     monkeypatch.setattr(chat_api, "memory_store", store)
-    monkeypatch.setattr(chat_api, "get_chat_runnable", lambda: runnable)
+    # 这条分支现在按“实际选中的档案”现搭提示词，不再是 @lru_cache 里写死的
+    # settings.system_prompt —— 所以这里捕获传进来的 system_message，
+    # 顺便断言它确实来自档案文件。
+    captured: list[str] = []
+
+    def fake_build(system_message: str):
+        captured.append(system_message)
+        return runnable
+
+    monkeypatch.setattr(chat_api, "build_chat_runnable", fake_build)
     client = TestClient(chat_api.app)
 
     posted = client.post("/api/chat", json={"session_id": "person-1", "message": "你好"})
@@ -96,6 +105,10 @@ def test_chat_api_saves_and_recovers_session_without_model_network(tmp_path: Pat
         {"role": "user", "content": "你好"},
         {"role": "assistant", "content": "收到"},
     ]
+    # 没选档案 → 默认档案的系统提示词（含共同规则块）
+    assert len(captured) == 1
+    assert "你是「影伴」" in captured[0]
+    assert "不是**那个人" in captured[0] or "你在**采用**" in captured[0]
 
 
 def test_chat_with_states_triggers_clip_and_keeps_session_history(tmp_path: Path, monkeypatch) -> None:

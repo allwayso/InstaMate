@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from app.agent_files import ensure_default
 from app.config import settings
 from app.memory import FileMemoryStore
 from app import profiles
@@ -68,6 +69,11 @@ class ChatHistoryResponse(BaseModel):
 memory_store = FileMemoryStore(settings.memory_read_dir, settings.memory_write_dir)
 
 
+# 默认档案必须存在 —— 不选档案时走的就是它。启动时播种，之后它只是普通文件，
+# 用户可以直接编辑 agents/default/system_prompt.md 换掉影伴的基础人设。
+ensure_default(settings.profile_data_dir, settings.system_prompt)
+
+
 class ModelNotConfigured(RuntimeError):
     pass
 
@@ -83,18 +89,25 @@ def get_chat_model() -> ChatOpenAI:
     )
 
 
-@lru_cache(maxsize=1)
-def get_chat_runnable() -> RunnableWithMessageHistory:
-    model = get_chat_model()
+def build_chat_runnable(system_message: str) -> RunnableWithMessageHistory:
+    """每次按实际生效的 system message 现搭一条链。
+
+    原来这里是 `@lru_cache(maxsize=1)` 且把 `settings.system_prompt` 写死在提示词里，
+    于是**换不了人设** —— 缓存一旦生成就永远是那个 system。现在系统提示词来自
+    实际选中的档案文件，所以必须每请求现搭。
+
+    贵的只有 `get_chat_model()`（那层仍然缓存），ChatPromptTemplate 的构造是纯内存操作。
+    每次都读一遍 md 文件也是故意的：**用户改完文件下一句话就生效**，不用重启服务。
+    """
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", settings.system_prompt),
+            ("system", system_message),
             MessagesPlaceholder(variable_name="history"),
             ("human", "{message}"),
         ]
     )
     return RunnableWithMessageHistory(
-        prompt | model,
+        prompt | get_chat_model(),
         memory_store.for_session,
         input_messages_key="message",
         history_messages_key="history",
@@ -121,6 +134,7 @@ def matching_state(message: str, states: list[PlayableState]) -> PlayableState |
 
 def chat_with_states(request: ChatRequest) -> ChatResponse:
     """Use the same persisted conversation and let the model choose one real state."""
+    agent = profiles.load_agent(request.profile_id)
     states = {state.id: state for state in request.states}
     tool = {
         "type": "function",
@@ -138,15 +152,16 @@ def chat_with_states(request: ChatRequest) -> ChatResponse:
         f"{state.name}({state.id}；触发词：{'、'.join(state.trigger_words) or '无'})"
         for state in request.states
     )
-    profile_context = profiles.prompt_context(request.profile_id) if request.profile_id else ""
     matched = matching_state(request.message, request.states)
     action_instruction = (
         f"已按触发词播放「{matched.name}」，请直接回应，不要再调用动作。" if matched else
         "问候或明确的动作请求要调用 play_state；没有合适状态时正常聊天。"
     )
+    # ★ 系统提示词来自**实际选中的档案文件**（选不选都是同一条路径）。
+    #   原来这里是 `settings.system_prompt + profiles.prompt_context(profile_id)`，
+    #   也就是每轮读原始档案 JSON 再现场截断 —— 见 plans/profile-to-agent.md。
     system = SystemMessage(content=(
-        f"{settings.system_prompt}\n你是住在桌面 3D 角色里的影伴。"
-        f"{profile_context}\n"
+        f"{agent.system_message()}\n\n"
         f"可用状态：{state_descriptions}。{action_instruction}"
         "每轮最多调用一个状态。回复会被朗读，请用简短口语回答，不写表情符号或舞台动作。"
     ))
@@ -207,8 +222,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
     try:
         if request.states or request.profile_id:
             return await run_in_threadpool(chat_with_states, request)
+        # 没状态也没档案：走默认档案的提示词。原来这条分支用的是一个
+        # `@lru_cache` 里写死的 settings.system_prompt，换不了人设；
+        # 现在它和带档案的路径只差“读了哪个文件”。
         result = await run_in_threadpool(
-            get_chat_runnable().invoke,
+            build_chat_runnable(profiles.load_agent(None).system_message()).invoke,
             {"message": request.message},
             {"configurable": {"session_id": request.session_id}},
         )
@@ -273,3 +291,46 @@ def profile_detail(profile_id: str) -> dict:
     if profile is None:
         raise HTTPException(status_code=404, detail="人物档案不存在")
     return profile
+
+
+# ── 智能体（系统提示词 + memory 文件）────────────────────────────────────
+#
+# 这几个端点的用途是**让用户看见智能体到底拿到了什么**。
+# “不用让智能体读整个档案”这个改动如果没有可查看的地方，
+# 用户就只能靠猜 —— 那是比改动前更糟的状态。
+
+
+@app.get("/api/agents")
+def agent_list() -> dict:
+    return {
+        "default": profiles.describe_agent(None),
+        "profiles": [
+            item for item in (profiles.describe_agent(p["profile_id"]) for p in profiles.list_profiles())
+            if item is not None
+        ],
+    }
+
+
+@app.get("/api/agents/{agent_id}")
+def agent_detail(agent_id: str) -> dict:
+    try:
+        # 'default' 也走这里 —— 它是合法取值，不是特殊分支
+        described = profiles.describe_agent(
+            None if agent_id == profiles.DEFAULT_AGENT_ID else agent_id
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if described is None:
+        raise HTTPException(status_code=404, detail="该档案还没有生成智能体文件")
+    return described
+
+
+@app.post("/api/agents/{agent_id}/regenerate")
+def agent_regenerate(agent_id: str) -> dict:
+    """重新渲染生成文件。分析结果（profiles/<id>.json）原封不动。"""
+    if agent_id == profiles.DEFAULT_AGENT_ID:
+        raise HTTPException(status_code=400, detail="默认档案可以直接编辑文件，不需要重新生成")
+    try:
+        return profiles.describe_agent(agent_id, regenerate=True)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
