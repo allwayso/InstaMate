@@ -14,6 +14,7 @@
  */
 import dynamic from 'next/dynamic';
 import ChatPanel from '@/components/chat-panel';
+import PageHeading from '@/components/page-heading';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
@@ -36,17 +37,14 @@ export default function Page() {
   }, [avatar]);
 
   return (
-    <main>
-      <header className="page-head">
-        <h1>InstaMate 影伴 · 角色调试页</h1>
-        <p>
-          检视 3D 角色、播放动作，并和拥有会话记忆的影伴对话。
-          <Link href="/create">上传照片创建角色</Link>
-          <Link href={statesHref}>管理状态库</Link><Link href="/profiles">导入聊天记忆</Link>
-        </p>
-      </header>
-      <DisplayCase src={avatar} />
-      <ChatPanel />
+    <main id="main-content">
+      <PageHeading eyebrow="属于你的陪伴" title="影伴空间" description="聊聊今天，让声音、记忆和动作连接你们。">
+        <Link className="button-link" href={statesHref}>管理角色状态 <span aria-hidden="true">↗</span></Link>
+      </PageHeading>
+      <div className="companion-workspace">
+        <DisplayCase src={avatar} />
+        <ChatPanel />
+      </div>
     </main>
   );
 }

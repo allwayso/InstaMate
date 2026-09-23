@@ -3,9 +3,7 @@
 /**
  * 动作库列表。
  *
- * 刻意**不做删除与重命名**：动作库是团队共享资产，误删一次就要重录，
- * 而重录需要人和摄像头同时在场。UI 上明确标注"本版不支持删除"，避免有人找不到入口时
- * 以为是自己眼瞎，转而去翻文件系统手删。
+ * 删除采用行内两步确认，同时保留下载与导入入口。
  *
  * 元数据分两类：
  *   · 动作本身的（时长/帧率/帧数/骨骼/来源）来自 clip 与目录条目
@@ -121,9 +119,7 @@ export default function MotionList({
       </div>
 
       <p className="motion-list-note">
-        共 {entries.length} 个（动捕 {mocapCount}）｜
-        <strong>本版不支持删除与重命名</strong>，避免误删团队资产；要清理请手动改
-        <code>web/public/clips/</code>
+        共 {entries.length} 个动作，其中 {mocapCount} 个来自摄像头录制。原始关键点仅在录制它的设备上可用。
       </p>
 
       <div className="motion-list-scroll">
@@ -147,6 +143,13 @@ export default function MotionList({
               <tr
                 key={e.id}
                 className={`${selectedId === e.id ? 'is-selected' : ''} ${playingId === e.id ? 'is-playing' : ''}`}
+                tabIndex={0}
+                aria-selected={selectedId === e.id}
+                onKeyDown={(event) => {
+                  if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault(); onSelect(e.id);
+                  }
+                }}
                 onClick={() => onSelect(e.id)}
               >
                 <td title={e.note}>{e.name}</td>

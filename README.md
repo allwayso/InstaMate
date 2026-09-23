@@ -1,6 +1,10 @@
-# InstaMate 影伴
+<p align="center">
+  <img src="assets/logo/instamate-logo-3d.png" alt="InstaMate 影伴 logo" width="180" />
+</p>
 
-从一组照片、一段聊天记录还原出一个和你共享记忆的 3D 桌面伙伴
+<h1 align="center">InstaMate 影伴</h1>
+
+<p align="center">从一组照片、一段聊天记录还原出一个和你共享记忆的 3D 桌面伙伴</p>
 
 > 当前进度：已打通 **静态 VRM 渲染（G0）**、**程序化动作播放（G1）**、
 > **摄像头动作录入与动作库（G2，实现完成；真人摄像头验收待执行）**，
@@ -23,17 +27,17 @@ cd InstaMate
 # 1) 拉示例 VRM 资产（两个角色，约 22 MB，不进 git，必须这一步）
 node tools/fetch-assets.mjs
 
-# 2) 同步 MediaPipe 本地资源（10 个文件 / 37.78 MB，不进 git，用动作录入必须这一步）
-node tools/sync-mediapipe.mjs
-
-# 3) 装依赖（用 ci 不用 install：保证版本与 lockfile 完全一致）
+# 2) 装依赖（用 ci 不用 install：保证版本与 lockfile 完全一致）
 cd web && npm ci
 
-# 4) 起开发服务器
+# 3) 起开发服务器（自动从已安装依赖同步 MediaPipe 本地资源）
 npm run dev
 ```
 
-- **http://localhost:3000** —— 角色调试台（G0/G1：静态渲染、环绕检视、动作播放）
+开发、构建和生产启动前会自动准备 MediaPipe 的 10 个文件（约 38 MB），无需连接 CDN。
+手动检查可在 `web/` 执行 `npm run sync:mediapipe -- --check`，修复可执行 `npm run sync:mediapipe`。
+
+- **http://localhost:3000** —— 角色工作台（G0/G1：静态渲染、环绕检视、动作播放）
 - **http://localhost:3000/motion-library** —— 动作录入与动作库（G2）
 - **http://localhost:3000/create** —— 照片生成动漫 3D 角色
 - **http://localhost:3000/profiles** —— 聊天 ZIP 解析与人物档案
@@ -51,7 +55,7 @@ cp .env.example .env                 # 填入自己的 OPENAI_API_KEY 等配置
 ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-保持 Python 服务运行，再打开主页下方的「和影伴聊天」。同一浏览器会话刷新后会从
+保持 Python 服务运行，再打开主页的「和影伴聊聊」对话栏。同一浏览器会话刷新后会从
 `memory/memory_data/` 恢复消息。微信聊天 ZIP 可在 `/profiles` 上传，选择目标说话者并
 生成性格与长期记忆，确认档案后点击「用于当前对话」。档案保存在本机
 `memory/profile_data/`，会通过同一聊天接口为文字和语音对话提供背景。原始 ZIP 不保存，
@@ -59,10 +63,10 @@ cp .env.example .env                 # 填入自己的 OPENAI_API_KEY 等配置
 
 **观察操作**：左键拖动旋转 · 右键拖动平移 · Shift + 左键平移 · Shift + 右键旋转 · 滚轮缩放 · 「归位视角」复位。
 
-**G1 动作控件**（右侧面板）：动作选择 · 播放/暂停/继续/停止 · 循环 · 时间轴（拖动即逐帧定位并暂停）·
-骨架辅助线 · 「恢复基础站姿」「参考姿态」· 导入本地 JSON。
+**G1 动作控件**（角色画布下方）：动作选择 · 播放/暂停/继续/停止 · 循环 · 时间轴（拖动即逐帧定位并暂停）。
+展开「角色与动作设置」可查看资产信息、骨架辅助线，使用「恢复基础站姿」「参考姿态」并导入本地 JSON。
 
-**G2 动作录入**（`/motion-library`）：启动摄像头 → 校准 1.5 秒 → 3 秒倒计时 → 录制（最长 10 秒）→
+**G2 动作录入**（`/motion-library`）：启动摄像头 → 预览识别（默认跳过校准，可在高级设置启用）→ 3 秒倒计时 → 录制（最长 10 秒）→
 裁剪 → 校验 → 保存进项目动作库 → 单/双角色回放。详见 `docs/G2-验收记录.md`。
 
 ### 语音与状态库
@@ -80,17 +84,16 @@ qwen-audio-3.0-tts-plus 合成；麦克风需要 localhost 或 HTTPS。
 在 memory/.env 中将 OPENAI_API_KEY 配为相应密钥，
 OPENAI_BASE_URL 配为 https://dashscope.aliyuncs.com/compatible-mode/v1，
 MODEL_NAME 配为支持工具调用的模型，例如 qwen-max。
+未配置模型密钥时，「你好」等已绑定的状态词仍可触发本地动作与简短回复；
+自由聊天会提示需要配置密钥。配置后重启 Python 服务即可启用完整对话。
 聊天 ZIP 分析可复用 `memory/.env` 的聊天模型配置；也可在 `memory/.env.analysis`
 单独配置 `ANALYSIS_OPENAI_API_KEY`、`ANALYSIS_OPENAI_BASE_URL` 与 `ANALYSIS_MODEL_NAME`。
 
 ### 照片创建角色
 
-在 `web/.env.local` 填入 `TRIPO_API_KEY`，或在 `tripo/.env` 中配置同名变量；
-本机 Python 还需安装 `tripo/requirements.txt`，或者用 `TRIPO_PYTHON` 指向已有依赖的解释器。
-打开 `/create` 上传 JPG/PNG 照片并填写名称。后台按「动漫 T-pose 参考图 → Tripo 建模和贴图
-→ 自动绑骨 GLB → 本地 VRM 转换与校验」执行。任务记录和原图默认在 `data/avatar-jobs/`，
-VRM 存入 `web/public/avatars/`，可以从完成任务直接打开角色并通过现有动作和聊天面板互动。
-生成需要 Tripo 账户可用额度，任务失败时网页会显示阶段和错误。
+打开 `/create`，先在「阿里百炼 · 图片动漫化」设置中选择千问 `qwen-image-3.0` / `qwen-image-3.0-pro` 或万相 `wan2.7-image-pro`，填写百炼 API Key 与兼容接口地址。配置保存在本机忽略 Git 的 `data/settings/aliyun-image.json`；也可在 `web/.env.local` 配置 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_BASE_URL`。上传 JPG/PNG 人物照片后，先生成动漫 T-pose 参考图并在页面确认效果。
+
+需要 3D 角色时，切换到页面顶部独立的「3D 建模」模块，在「Tripo · 3D 建模与绑骨」中填写**独立的 Tripo 密钥和地址**，选择满意的参考图后手动开始建模。3D 阶段依次完成 Tripo 建模、贴图、自动绑骨 GLB、本地 VRM 转换与校验；Tripo 不再用于图片动漫化。Tripo 配置存于本机的 `tripo/.env`，也可在 `web/.env.local` 中填入 `TRIPO_API_KEY`。本机 Python 需安装 `tripo/requirements.txt`，或用 `TRIPO_PYTHON` 指向已有依赖的解释器。任务记录、原图和参考图保存在 `data/avatar-jobs/`，VRM 存入 `web/public/avatars/`。图片模块可逐条删除记录，或批量清理已结束任务；确认后会删除该任务的原图、参考图及其 VRM，正在生成的任务会保留。两个云端阶段分别需要各自账户的可用额度，任务失败时页面会显示阶段和错误。
 
 ### 启动成功的判据
 
@@ -120,10 +123,9 @@ VRM 存入 `web/public/avatars/`，可以从完成任务直接打开角色并通
 ### 从第三方 GLB 接入一个新角色
 
 ```bash
-# 1) Tripo 生成（T-pose 是关键：clip 的轴语义依赖 rest pose）
+# 1) 先在 /create 用百炼生成并确认动漫 T-pose 参考图
 cd tripo
-python tpose_pipeline.py --image <照片> --upto ref     # 先出 T-pose 参考图：便宜且肉眼可判
-python tpose_pipeline.py --run <run目录> --upto rig    # 几何 → 贴图 → 绑骨（out_format 默认 glb）
+python tpose_pipeline.py --image <已生成的动漫T-pose图> --upto rig  # Tripo 仅负责几何 → 贴图 → 绑骨
 
 # 2) 转成 VRM（自动把朝向转到 +Z、缩放到米制，并自检）
 cd ..
@@ -153,8 +155,8 @@ node tools/gltf-to-vrm.mjs <rigged.glb> -o web/public/avatars/hero.vrm --name "�
 | `npm run gen:clips` | 重新生成全部程序化动作（产出即自检，不合格不写盘） |
 | `npm run validate:all` | 校验 `public/clips/` 下全部动作 |
 | `npm run validate:fixtures` | 跑校验器夹具：6 个坏的全被拒、合法的通过 |
-| `npm test` | 全部 173 项（含 G1 回归、动捕纯逻辑、动作库 API 集成、资产目录） |
-| `npm run verify:pipeline` | 25 项管线验证（假摄像头驱动整条动捕管线，含 10 条验收的可自动化部分） |
+| `npm test` | Node 测试（含 G1 回归、动捕纯逻辑、动作库 API 集成、资产目录）；API 集成项需先启动本机网页服务 |
+| `npm run verify:pipeline` | 管线验证（需 Chrome；假摄像头驱动整条动捕管线，含 10 条验收的可自动化部分） |
 | `npm run test:clip` | 15 项播放与插值逻辑测试（G1 回归） |
 | `npm run test:mocap` | 85 项动捕纯逻辑测试（重定向 61 + clip 烘焙 24，全离线） |
 | `npm run sync:mediapipe` | 同步 MediaPipe 本地资源 |

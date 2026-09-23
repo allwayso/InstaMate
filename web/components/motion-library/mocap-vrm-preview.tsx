@@ -60,6 +60,7 @@ export interface MocapPreviewHandle {
   setMode(mode: PreviewMode): void;
   getSnapshot(): ClipSnapshot;
   getStatus(): PreviewStatus;
+  getCanvas(): HTMLCanvasElement | null;
 }
 
 interface Props {
@@ -95,16 +96,24 @@ const MocapVrmPreview = forwardRef<MocapPreviewHandle, Props>(function MocapVrmP
     if (!mount) return;
     let cancelled = false;
 
-    const scene = new VrmScene(mount);
+    const scene = new VrmScene(mount, { background: 0x1b2326, captureCanvas: true });
     sceneRef.current = scene;
     playerRef.current = player;
+    const resizeObserver = new ResizeObserver(() => {
+      scene.resize();
+      scene.frameCamera();
+    });
+    resizeObserver.observe(mount);
 
     (async () => {
       try {
         await scene.loadSlot('primary', primaryUrl);
         if (cancelled) return;
         // 加载后先写基础站姿：normalized 骨骼的初始姿态是 T-pose，不是待机姿态
-        for (const slot of scene.getSlots()) slot.runtime.applyBasePose().ok;
+        for (const slot of scene.getSlots()) {
+          slot.runtime.applyBasePose();
+          slot.runtime.commit(0);
+        }
         scene.frameCamera();
         readyRef.current = true;
         setSceneReady(true);
@@ -142,6 +151,7 @@ const MocapVrmPreview = forwardRef<MocapPreviewHandle, Props>(function MocapVrmP
 
     return () => {
       cancelled = true;
+      resizeObserver.disconnect();
       scene.stop();
       player.reset();
       scene.dispose();
@@ -161,7 +171,12 @@ const MocapVrmPreview = forwardRef<MocapPreviewHandle, Props>(function MocapVrmP
     if (showSecond && secondUrl && !scene.getSlot('second')) {
       scene
         .loadSlot('second', secondUrl)
-        .then(() => scene.getSlot('second')?.runtime.applyBasePose())
+        .then(() => {
+          const slot = scene.getSlot('second');
+          slot?.runtime.applyBasePose();
+          slot?.runtime.commit(0);
+          scene.frameCamera();
+        })
         .catch((e) => onError?.(e instanceof Error ? e.message : String(e)));
     } else if (!showSecond && scene.getSlot('second')) {
       const slot = scene.getSlot('second');
@@ -195,7 +210,10 @@ const MocapVrmPreview = forwardRef<MocapPreviewHandle, Props>(function MocapVrmP
         if (!scene) throw new Error('场景尚未就绪');
         if (scene.getSlot('second')) return;
         await scene.loadSlot('second', url);
-        scene.getSlot('second')?.runtime.applyBasePose();
+        const slot = scene.getSlot('second');
+        slot?.runtime.applyBasePose();
+        slot?.runtime.commit(0);
+        scene.frameCamera();
       },
       removeSecond() {
         sceneRef.current?.removeSlot('second');
@@ -237,6 +255,9 @@ const MocapVrmPreview = forwardRef<MocapPreviewHandle, Props>(function MocapVrmP
         return player.getSnapshot();
       },
       getStatus,
+      getCanvas() {
+        return sceneRef.current?.renderer.domElement ?? null;
+      },
     }),
     [player, getStatus],
   );

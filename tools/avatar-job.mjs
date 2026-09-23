@@ -5,12 +5,15 @@ import { existsSync } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateAnimeReference } from './aliyun-image.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const web = join(repo, 'web');
 const jobsRoot = resolve(process.env.AVATAR_JOBS_DIR ?? join(repo, 'data', 'avatar-jobs'));
 const id = process.argv[2];
+const phase = process.argv[3] ?? 'image';
 if (!/^[0-9a-f]{32}$/.test(id ?? '')) process.exit(2);
+if (!['image', 'model'].includes(phase)) process.exit(2);
 const dir = join(jobsRoot, id);
 const jobPath = join(dir, 'job.json');
 
@@ -44,51 +47,58 @@ async function run(command, args, environment) {
 
 try {
   const job = await readJob();
-  const python = process.env.TRIPO_PYTHON
-    ?? (existsSync(join(repo, 'memory', '.venv', 'bin', 'python'))
-      ? join(repo, 'memory', '.venv', 'bin', 'python') : 'python3');
   const prompt = [
-    'Transform the reference person into a polished anime character.',
-    'Keep facial identity, hair and recognizable clothing colors.',
-    job.style === 'chibi' ? 'Use a chibi anime style with a full human-compatible body.' :
-      job.style === 'soft' ? 'Use a soft hand-painted anime illustration style.' :
-        'Use a clean Japanese anime character style.',
-    'Full body from head to toe, strict T-pose, straight horizontal arms, palms down, legs slightly apart.',
-    'Facing camera, plain neutral background, no cropped limbs, one person only.',
+    '以输入照片中的同一个人为原型，只生成一张单人全身动漫立绘，用于后续 3D 建模。整张图片只出现这一个人物、一个正面视角、一个姿势。',
+    '保留五官身份特征、发型、发色、服装款式和主要颜色，不要改变年龄感。',
+    job.style === 'chibi' ? '采用 Q 版动漫画风，但保持清晰完整的人体四肢和手指。' :
+      job.style === 'soft' ? '采用柔和的手绘动漫画风。' : '采用干净的日系动漫赛璐璐画风。',
+    '人物居中、正面面向镜头，摆严格对称的 T-pose：双臂在肩高水平伸直，双手与身体分开，手掌朝下，双腿直立且略微分开。头顶、双手和鞋底都完整入镜，人物尽可能占满画面，同时在四周留少量空白。',
+    '纯浅色背景，均匀光照。不要角色设定板、三视图或多格拼版；不要侧面和背面视图、头部特写、重复人物、文字标注、色卡、道具或多余的肢体。',
   ].join(' ');
-  const environment = {
-    ...process.env,
-    TRIPO_IMAGE_PROMPT: prompt,
-    PYTHONUNBUFFERED: '1',
-  };
-  const pipeline = join(repo, 'tripo', 'tpose_pipeline.py');
-  await update({ status: 'running', stage: '动漫化与 T-pose 参考图' });
-  await run(python, [pipeline, '--run', dir, '--image', join(dir, job.image_name), '--upto', 'ref'], environment);
-  await update({ stage: 'Tripo 建模、贴图与绑骨' });
-  await run(python, [pipeline, '--run', dir, '--upto', 'rig'], environment);
-  const state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
-  const glb = (state.rigged_files ?? []).find((item) => typeof item === 'string' && item.toLowerCase().endsWith('.glb'));
-  if (!glb) throw new Error('Tripo 没有返回绑骨 GLB，请检查任务结果');
-  const input = resolve(glb);
-  if (!input.startsWith(dir + '/')) throw new Error('绑骨模型路径不在当前任务目录');
-  const output = join(web, 'public', 'avatars', id + '.vrm');
-  const temporary = join(web, 'public', 'avatars', id + '.tmp.vrm');
-  await update({ stage: '转换并验证 VRM' });
-  try {
-    await run(process.execPath, [
-      join(repo, 'tools', 'gltf-to-vrm.mjs'), input, '-o', temporary,
-      '--name', job.name, '--height', '1.75',
-    ], process.env);
-    await rename(temporary, output);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
+  if (phase === 'image') {
+    await update({ status: 'running', stage: '阿里百炼正在生成动漫 T-pose 参考图' });
+    await generateAnimeReference({
+      inputPath: join(dir, job.image_name),
+      runDir: dir,
+      provider: process.env.ALIYUN_IMAGE_PROVIDER,
+      model: process.env.ALIYUN_IMAGE_MODEL,
+      baseUrl: process.env.DASHSCOPE_BASE_URL,
+      apiKey: process.env.DASHSCOPE_API_KEY,
+      prompt,
+    });
+    await update({ status: 'image-ready', stage: '动漫参考图已生成，确认后可继续生成 3D',
+      preview_url: '/api/avatar-jobs/' + id + '/reference' });
+  } else {
+    const python = process.env.TRIPO_PYTHON
+      ?? (existsSync(join(repo, 'memory', '.venv', 'bin', 'python'))
+        ? join(repo, 'memory', '.venv', 'bin', 'python') : 'python3');
+    const pipeline = join(repo, 'tripo', 'tpose_pipeline.py');
+    await update({ stage: 'Tripo 建模、贴图与绑骨' });
+    await run(python, [pipeline, '--run', dir, '--upto', 'rig'], { ...process.env, PYTHONUNBUFFERED: '1' });
+    const state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
+    const glb = (state.rigged_files ?? []).find((item) => typeof item === 'string' && item.toLowerCase().endsWith('.glb'));
+    if (!glb) throw new Error('Tripo 没有返回绑骨 GLB，请检查任务结果');
+    const input = resolve(glb);
+    if (!input.startsWith(dir + '/')) throw new Error('绑骨模型路径不在当前任务目录');
+    const output = join(web, 'public', 'avatars', id + '.vrm');
+    const temporary = join(web, 'public', 'avatars', id + '.tmp.vrm');
+    await update({ stage: '转换并验证 VRM' });
+    try {
+      await run(process.execPath, [
+        join(repo, 'tools', 'gltf-to-vrm.mjs'), input, '-o', temporary,
+        '--name', job.name, '--height', '1.75',
+      ], process.env);
+      await rename(temporary, output);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
+    await update({
+      status: 'complete', stage: '完成',
+      avatar_url: '/avatars/' + id + '.vrm',
+      preview_url: '/api/avatar-jobs/' + id + '/reference',
+    });
   }
-  await update({
-    status: 'complete', stage: '完成',
-    avatar_url: '/avatars/' + id + '.vrm',
-    preview_url: '/api/avatar-jobs/' + id + '/reference',
-  });
 } catch (error) {
   await update({
     status: 'failed', stage: '失败',

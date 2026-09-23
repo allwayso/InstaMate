@@ -22,6 +22,8 @@ import { HolisticSession, type HolisticFrame, type SessionStatus } from '@/lib/m
 import type { HolisticConnections } from '@/lib/mocap/holistic-session';
 import type { Landmark } from '@/lib/mocap/mocap-types';
 import LandmarkOverlay, { type OverlayLayers } from './landmark-overlay';
+import { checkVendorFiles, REQUIRED_VENDOR_FILES } from '@/lib/mocap/mediapipe-assets';
+import { describeCameraError } from '@/lib/mocap/camera-errors';
 
 export interface CameraFramePayload {
   frame: HolisticFrame;
@@ -31,6 +33,8 @@ export interface CameraFramePayload {
 export interface CameraCaptureHandle {
   session: HolisticSession | null;
   video: HTMLVideoElement | null;
+  start(): Promise<void>;
+  getOverlayCanvas(): HTMLCanvasElement | null;
 }
 
 interface Props {
@@ -82,6 +86,18 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [detail, setDetail] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [vendor, setVendor] = useState<Awaited<ReturnType<typeof checkVendorFiles>> | null>(null);
+  const [checking, setChecking] = useState(false);
+  const checkResources = useCallback(async () => {
+    setChecking(true);
+    const result = await checkVendorFiles();
+    setVendor(result);
+    setChecking(false);
+    if (result.ok) setError(null);
+    return result;
+  }, []);
+
+  useEffect(() => { void checkResources(); }, [checkResources]);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState<string>('');
   const [tick, setTick] = useState(0);
@@ -99,6 +115,10 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
 
   const onFrameRef = useRef(onFrame);
   onFrameRef.current = onFrame;
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
 
   // 覆盖层重画：用 rAF 节流到 ~30Hz，而不是每个推理帧都 setState
   useEffect(() => {
@@ -131,9 +151,15 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
   const stop = useCallback(() => {
     sessionRef.current?.stop();
     sessionRef.current = null;
-    if (handleRef) handleRef.current = { session: null, video: null };
+    if (handleRef?.current) {
+      handleRef.current.session = null;
+      handleRef.current.video = null;
+    }
     lastFrameRef.current = { pose: null, leftHand: null, rightHand: null, face: null };
     setFps(0);
+    setInferenceMs(0);
+    setPresent({ pose: false, world: false, hands: false, face: false });
+    setError(null);
     setStatus('stopped');
     setDetail('已关闭');
   }, [handleRef]);
@@ -151,6 +177,12 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
       const video = videoRef.current;
       if (!video) return;
       setError(null);
+      setVendor(null);
+      resultKeysRef.current = [];
+      worldFieldRef.current = null;
+      setResultKeys([]);
+      setWorldFieldAvailable(null);
+      setPresent({ pose: false, world: false, hands: false, face: false });
       // 先停掉旧的，避免两条 getUserMedia 抢同一个摄像头
       sessionRef.current?.stop();
 
@@ -160,11 +192,11 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         onStatus: (s, d) => {
           setStatus(s);
           setDetail(d);
-          onStatus?.(s, d);
+          onStatusRef.current?.(s, d);
         },
         onError: (e) => {
-          setError(e.message);
-          onError?.(e.message);
+          setError(describeCameraError(e));
+          onErrorRef.current?.(e.message);
         },
         onFrame: (frame) => {
           // 关键数据到位情况：每帧更新一次，缺什么一眼可见
@@ -185,20 +217,42 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         },
       });
       sessionRef.current = session;
-      if (handleRef) handleRef.current = { session, video };
+      if (handleRef?.current) {
+        handleRef.current.session = session;
+        handleRef.current.video = video;
+      }
 
       try {
         await session.start();
+        if (sessionRef.current !== session) return;
+        setVendor({ ok: true, missing: [], checked: REQUIRED_VENDOR_FILES.length });
         connectionsRef.current = session.connectionsOrNull;
         // 授权后再枚举一次：首次枚举时 label 是空的（浏览器隐私限制）
         setDevices(await HolisticSession.listDevices());
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (sessionRef.current !== session) return;
+        const resources = await checkVendorFiles();
+        if (sessionRef.current !== session) return;
+        setVendor(resources);
+        setError(describeCameraError(e));
         setStatus('error');
       }
     },
-    [handleRef, onError, onStatus],
+    [handleRef],
   );
+
+  useEffect(() => {
+    if (!handleRef) return;
+    handleRef.current = {
+      session: sessionRef.current,
+      video: videoRef.current,
+      start: () => start(deviceId),
+      getOverlayCanvas: () => boxRef.current?.querySelector<HTMLCanvasElement>('canvas.mocap-overlay') ?? null,
+    };
+    return () => {
+      handleRef.current = null;
+    };
+  }, [deviceId, handleRef, start]);
 
   useEffect(() => {
     // 初次挂载先探一下有没有摄像头（不申请权限，label 可能为空）
@@ -208,7 +262,7 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
   const getFrame = useCallback(() => lastFrameRef.current, []);
 
   const running = status === 'running' || status === 'starting';
-  const showVideo = running || status === 'stopped';
+  const showVideo = running;
 
   return (
     <div className="camera-capture">
@@ -218,7 +272,7 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
             启动摄像头
           </button>
         ) : (
-          <button type="button" className="danger" onClick={stop}>
+          <button type="button" className="danger" onClick={stop} disabled={locked} title={locked ? '请先停止录制' : undefined}>
             关闭摄像头
           </button>
         )}
@@ -250,7 +304,7 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         </div>
       </div>
 
-      <div className="camera-stage" ref={boxRef} style={{ width: VIDEO_W, height: VIDEO_H }}>
+      <div className="camera-stage" ref={boxRef}>
         <video
           ref={videoRef}
           className={`camera-video${showVideo ? '' : ' is-hidden'}`}
@@ -258,12 +312,13 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
           height={VIDEO_H}
           playsInline
           muted
-          style={{ width: VIDEO_W, height: VIDEO_H, transform: 'scaleX(-1)' }}
         />
         {!showVideo && (
           <div className="camera-placeholder">
-            <p>摄像头未启动</p>
-            <p className="hint">画面会镜像显示（自拍习惯）；送进模型的关键点不镜像</p>
+            <span className="camera-placeholder-frame" aria-hidden="true" />
+            <h3>{status === 'error' ? '准备好后，再试一次' : '让影伴跟随你的动作'}</h3>
+            <p>启动摄像头，站在画面中央</p>
+            <p className="hint">视频仅用于本地动作识别</p>
           </div>
         )}
         {showVideo && (
@@ -289,7 +344,24 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         <span>
           推理 <strong>{fps > 0 ? fps.toFixed(1) : '—'}</strong> fps
         </span>
-        <span>单帧 {inferenceMs > 0 ? `${inferenceMs.toFixed(0)}ms` : '—'}</span>
+        <span className="camera-resource-status">{checking ? '检查模型资源…' : vendor?.ok ? '本地模型已就绪' : vendor ? '模型资源待修复' : '准备模型中'}</span>
+      </div>
+
+      {vendor && !vendor.ok ? (
+        <div className="camera-error" role="alert">
+          <strong>动作识别资源尚未准备好</strong>
+          <p>请重新启动开发服务，让它自动补齐本地模型，然后重新检测。</p>
+          <button type="button" onClick={() => void checkResources()} disabled={checking}>{checking ? '检测中…' : '重新检测资源'}</button>
+          <details><summary>查看修复方法与缺失文件（{vendor.missing.length}）</summary>
+            <p>在仓库根目录执行 <code>node tools/sync-mediapipe.mjs</code>，或在 web 目录重新运行 <code>npm run dev</code>。</p>
+            <pre>{vendor.missing.join('\n')}</pre>
+          </details>
+        </div>
+      ) : error && <div className="camera-error" role="alert"><strong>摄像头暂时不可用</strong><p>{error}</p><span className="hint">调整后点击上方“启动摄像头”重试。</span></div>}
+
+      <details className="advanced-panel camera-diagnostics">
+        <summary><span>识别诊断</span><span className="summary-note">关键点 · 性能 · 图例</span></summary>
+        <div className="camera-status"><span>单帧 {inferenceMs > 0 ? `${inferenceMs.toFixed(0)}ms` : '—'}</span>
         <span className="hint">
           帧回调 {sessionRef.current?.usingVideoFrameCallback ? 'rVFC' : 'rAF/—'}
         </span>
@@ -327,12 +399,8 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         <span><i style={{ background: '#e03131' }} />严重丢失</span>
       </div>
 
-      {error && (
-        <div className="camera-error" role="alert">
-          <strong>摄像头/模型出错</strong>
-          <pre>{error}</pre>
-        </div>
-      )}
+      <p className="hint">预览为镜像；模型接收原始画面，覆盖层与视频使用相同缩放。</p>
+      </details>
     </div>
   );
 }

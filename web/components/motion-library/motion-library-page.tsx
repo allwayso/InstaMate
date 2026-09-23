@@ -31,6 +31,7 @@ import type { Pose } from '@/lib/pose';
 import {
   RETARGET_TARGET_BONES,
   RETARGET_IS_MEASURED,
+  RETARGET_PROFILE_ID,
   buildHandsInput,
   handSideFor,
   retarget,
@@ -46,12 +47,18 @@ import { PoseSmoother, computeBoneConfidence, isBodyTracked } from '@/lib/mocap/
 import { RecordingSession, type RecordingOutcome } from '@/lib/mocap/recording';
 import { buildClip, type BuildClipResult } from '@/lib/mocap/clip-builder';
 import { MOCAP_LIMITS, type MocapRawFrame } from '@/lib/mocap/mocap-types';
+import { DiagnosticRecorder } from '@/lib/mocap/diagnostic-recorder';
+import type { DiagnosticTrace } from '@/lib/mocap/diagnostic-recorder';
+import { HOLISTIC_OPTIONS, MEDIAPIPE_HOLISTIC_VERSION } from '@/lib/mocap/mediapipe-assets';
 import {
   createKalidokitSolver,
+  KALIDOKIT_VERSION,
   probeRestingDefaultGuard,
   type MocapSolver,
 } from '@/lib/mocap/kalidokit-solver';
-import { checkVendorFiles } from '@/lib/mocap/mediapipe-assets';
+import PageHeading from '@/components/page-heading';
+import { stateAfterCameraStatus, type MachineState } from '@/lib/mocap/capture-state';
+export type { MachineState } from '@/lib/mocap/capture-state';
 import {
   fetchCatalog,
   loadClipFile,
@@ -61,19 +68,6 @@ import {
 import { validateClipFile } from '@/lib/contracts';
 import { HUMAN_BONES_VRM1 as HUMAN_BONES } from '@/lib/contracts';
 import type { ClipFile } from '@/lib/clip-spec';
-
-export type MachineState =
-  | 'camera-off'
-  | 'loading-model'
-  | 'detecting'
-  | 'calibrating'
-  | 'ready'
-  | 'countdown'
-  | 'recording'
-  | 'processing'
-  | 'reviewing'
-  | 'saving'
-  | 'error';
 
 const STATE_LABEL: Record<MachineState, string> = {
   'camera-off': '等待启动摄像头',
@@ -102,6 +96,13 @@ function basePoseAll(): Pose {
 const DEFAULT_AVATAR = '/avatars/sample.vrm';
 const SECOND_AVATAR = '/avatars/compat.vrm';
 const COUNTDOWN_FROM = 3;
+/** 左栏（摄像头）默认宽度占比：右侧影伴预览是主角，默认给 62% */
+const DEFAULT_SPLIT = 38;
+const SPLIT_STORAGE_KEY = 'mocap-split';
+const SPLIT_MIN = 20;
+const SPLIT_MAX = 70;
+/** 「动作同步诊断」面板开关：暂时隐藏，调轴向映射时改回 true */
+const SHOW_DIAGNOSTIC_PANEL = false;
 
 export default function MotionLibraryPage() {
   // ── 状态机 ───────────────────────────────────────────────────────────
@@ -114,7 +115,6 @@ export default function MotionLibraryPage() {
 
   // ── UI 状态 ──────────────────────────────────────────────────────────
   const [notice, setNotice] = useState<{ kind: 'info' | 'warn' | 'error'; text: string } | null>(null);
-  const [vendor, setVendor] = useState<{ ok: boolean; missing: string[]; checked: number } | null>(null);
   const [calibration, setCalibration] = useState<CalibrationOutcome | null>(null);
   const [calibProgress, setCalibProgress] = useState(0);
   const [recOutcome, setRecOutcome] = useState<RecordingOutcome | null>(null);
@@ -138,6 +138,55 @@ export default function MotionLibraryPage() {
   const [probeLabel, setProbeLabel] = useState('抬右手');
   const [probeResult, setProbeResult] = useState<ProbeSummary | null>(null);
 
+  // ── 左右分栏（摄像头 | 影伴预览）──────────────────────────────────────
+  // split 是左栏宽度百分比；右侧影伴预览拿走剩余空间（它是主角）。
+  const [split, setSplit] = useState(DEFAULT_SPLIT);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(SPLIT_STORAGE_KEY));
+      if (Number.isFinite(saved) && saved >= SPLIT_MIN && saved <= SPLIT_MAX) setSplit(saved);
+    } catch {
+      /* 隐私模式下 localStorage 不可用，用默认值即可 */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SPLIT_STORAGE_KEY, split.toFixed(1));
+    } catch {
+      /* 同上，忽略 */
+    }
+  }, [split]);
+
+  const startSplitDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const grid = gridRef.current;
+    if (!grid || e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const rect = grid.getBoundingClientRect();
+    handle.classList.add('is-dragging');
+    handle.setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      setSplit(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct)));
+    };
+    const onUp = () => {
+      handle.classList.remove('is-dragging');
+      window.removeEventListener('pointermove', onMove);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+  }, []);
+
+  const onSplitKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowLeft') setSplit((s) => Math.max(SPLIT_MIN, s - 2));
+    else if (e.key === 'ArrowRight') setSplit((s) => Math.min(SPLIT_MAX, s + 2));
+    else return;
+    e.preventDefault();
+  }, []);
+
   // ── 管线对象（用 ref：每帧都要访问，不能走 state）────────────────────
   const solverRef = useRef<MocapSolver | null>(null);
   const smootherRef = useRef<PoseSmoother | null>(null);
@@ -155,6 +204,12 @@ export default function MotionLibraryPage() {
    * 按真人逐条实测修好之后再切回默认开启。
    */
   const [skipCalibration, setSkipCalibration] = useState(true);
+  const [diagnosticStatus, setDiagnosticStatus] = useState<'idle' | 'preparing' | 'recording' | 'saving' | 'saved' | 'error'>('idle');
+  const [diagnosticElapsed, setDiagnosticElapsed] = useState(0);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
+  const [diagnosticSaved, setDiagnosticSaved] = useState<{ id: string; path: string; relativePath: string } | null>(null);
+  const diagnosticRef = useRef<DiagnosticRecorder | null>(null);
+  const pendingDiagnosticRef = useRef<{ video: Blob; trace: DiagnosticTrace } | null>(null);
   const skipCalibrationRef = useRef(true);
   const lastFrameAtRef = useRef(0);
   const previewRef = useRef<MocapPreviewHandle | null>(null);
@@ -204,11 +259,6 @@ export default function MotionLibraryPage() {
   swapRef.current = swap;
 
   const base = useMemo(basePoseAll, []);
-
-  // ── 启动自检：本地资源齐不齐 ─────────────────────────────────────────
-  useEffect(() => {
-    checkVendorFiles().then(setVendor);
-  }, []);
 
   // ── 动作目录 ─────────────────────────────────────────────────────────
   const refreshCatalog = useCallback(async () => {
@@ -369,6 +419,23 @@ export default function MotionLibraryPage() {
         pipelineRef.current.applyError = st.applyError;
       }
 
+      diagnosticRef.current?.append({
+        timestampMs: now,
+        raw: {
+          poseLandmarks: frame.poseLandmarks,
+          poseWorldLandmarks: frame.poseWorldLandmarks,
+          leftHandLandmarks: frame.leftHandLandmarks,
+          rightHandLandmarks: frame.rightHandLandmarks,
+        },
+        solver: { pose: kp, faceHead: kf?.head ?? null, hands },
+        retarget: rt,
+        output: smoothed,
+        confidence,
+        tracked,
+        inferenceMs: frame.inferenceMs,
+        rendererApplyError: st?.applyError ?? null,
+      });
+
       // 7) 录制缓冲
       const rec = recordingRef.current;
       if (rec?.isRecording) {
@@ -396,6 +463,112 @@ export default function MotionLibraryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [ensureSmoother],
   );
+
+  const uploadDiagnostic = useCallback(async (capture: { video: Blob; trace: DiagnosticTrace }) => {
+    setDiagnosticStatus('saving');
+    setDiagnosticError(null);
+    pendingDiagnosticRef.current = capture;
+    try {
+      const extension = capture.video.type.startsWith('video/mp4') ? 'mp4' : 'webm';
+      const form = new FormData();
+      form.append('video', capture.video, `comparison.${extension}`);
+      form.append('trace', new Blob([JSON.stringify(capture.trace)], { type: 'application/json' }), 'trace.json');
+      const response = await fetch('/api/mocap-diagnostics', { method: 'POST', body: form });
+      const result = await response.json() as { ok: boolean; id?: string; path?: string; relativePath?: string; error?: string };
+      if (!response.ok || !result.ok || !result.id || !result.path || !result.relativePath) {
+        throw new Error(result.error ?? `HTTP ${response.status}`);
+      }
+      pendingDiagnosticRef.current = null;
+      setDiagnosticSaved({ id: result.id, path: result.path, relativePath: result.relativePath });
+      setDiagnosticStatus('saved');
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : String(error));
+      setDiagnosticStatus('error');
+    }
+  }, []);
+
+  const startDiagnostic = useCallback(async () => {
+    if (diagnosticRef.current || pendingDiagnosticRef.current) return;
+    setDiagnosticStatus('preparing');
+    setDiagnosticError(null);
+    setDiagnosticSaved(null);
+    setDiagnosticElapsed(0);
+    try {
+      const camera = cameraRef.current;
+      if (!camera) throw new Error('摄像头组件尚未就绪，请稍后重试。');
+      if (!camera.session?.isRunning) await camera.start();
+
+      const deadline = performance.now() + 15_000;
+      let sources: { video: HTMLVideoElement; overlay: HTMLCanvasElement; avatar: HTMLCanvasElement } | null = null;
+      while (performance.now() < deadline) {
+        const video = cameraRef.current?.video;
+        const overlay = cameraRef.current?.getOverlayCanvas();
+        const avatar = previewRef.current?.getCanvas();
+        if (cameraRef.current?.session?.isRunning && video?.videoWidth && overlay && avatar &&
+            previewRef.current?.getStatus().slots.length && solverRef.current) {
+          sources = { video, overlay, avatar };
+          break;
+        }
+        if (cameraRef.current?.session?.currentStatus === 'error') break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      if (!sources) throw new Error('摄像头、识别模型或 3D 角色尚未就绪，请确认画面正常后重试。');
+      previewRef.current?.setMode('live');
+      const smoother = ensureSmoother();
+      diagnosticRef.current = new DiagnosticRecorder(sources, {
+        cameraWidth: sources.video.videoWidth,
+        cameraHeight: sources.video.videoHeight,
+        previewMirrored: true,
+        modelInputMirrored: false,
+        avatarUrl: primaryAvatar,
+        secondAvatarUrl: twoChars ? secondAvatar : null,
+        swapLeftRight: swap,
+        calibrationSkipped: skipCalibration,
+        calibrationCorrections: correctionsRef.current ? { ...correctionsRef.current } : null,
+        smoothing: {
+          tauMs: smoother.tauMs,
+          holdMs: smoother.holdMs,
+          blendMs: smoother.blendMs,
+          minConfidence: smoother.minConfidence,
+        },
+        avatarSlots: previewRef.current?.getStatus().slots ?? [],
+        holisticVersion: MEDIAPIPE_HOLISTIC_VERSION,
+        holisticOptions: { ...HOLISTIC_OPTIONS },
+        kalidokitVersion: KALIDOKIT_VERSION,
+        retargetProfile: RETARGET_PROFILE_ID,
+      });
+      setDiagnosticStatus('recording');
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : String(error));
+      setDiagnosticStatus('error');
+    }
+  }, [ensureSmoother, primaryAvatar, secondAvatar, skipCalibration, swap, twoChars]);
+
+  const stopDiagnostic = useCallback(async () => {
+    const recorder = diagnosticRef.current;
+    if (!recorder) return;
+    diagnosticRef.current = null;
+    setDiagnosticStatus('saving');
+    try {
+      const capture = await recorder.stop();
+      await uploadDiagnostic(capture);
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : String(error));
+      setDiagnosticStatus('error');
+    }
+  }, [uploadDiagnostic]);
+
+  useEffect(() => {
+    if (diagnosticStatus !== 'recording') return;
+    const timer = setInterval(() => {
+      const elapsed = diagnosticRef.current?.elapsedMs ?? 0;
+      setDiagnosticElapsed(elapsed);
+      if (elapsed >= 90_000) void stopDiagnostic();
+    }, 250);
+    return () => clearInterval(timer);
+  }, [diagnosticStatus, stopDiagnostic]);
+
+  useEffect(() => () => diagnosticRef.current?.abort(), []);
 
   // ── 校准 ─────────────────────────────────────────────────────────────
 
@@ -821,39 +994,25 @@ export default function MotionLibraryPage() {
    * 是因为禁用 + tooltip 能让人一眼看出缺哪一步，而弹提示需要先点错一次。
    */
   const calibrated = calibration?.ok === true;
-  const canRecord = state === 'ready' && (skipCalibration || calibrated);
+  const diagnosticActive = diagnosticStatus === 'preparing' || diagnosticStatus === 'recording' || diagnosticStatus === 'saving';
+  const canRecord = state === 'ready' && (skipCalibration || calibrated) && !diagnosticActive;
   const recordHint = !skipCalibration && !calibrated
     ? '需要先完成校准：点上方「校准（1.5 秒）」，保持自然站姿'
     : state !== 'ready'
       ? `当前状态：${STATE_LABEL[state]}`
       : '';
-  const busy = state === 'saving' || state === 'processing';
+  const busy = state === 'saving' || state === 'processing' || diagnosticActive;
 
   return (
-    <main className="mocap-page">
-      <header className="mocap-header">
-        <h1>动作录入与动作库</h1>
-        <nav>
-          <a href="/">角色调试台</a>
-        </nav>
-        <span className={`state-badge state-${state}`}>{STATE_LABEL[state]}</span>
-      </header>
-
-      {!RETARGET_IS_MEASURED && (
-        <div className="banner warn">
-          <strong>轴向映射尚未实测</strong>：Kalidokit 的输出是它自己调过的 rig 空间，
-          左右与轴符号必须用真人动作标定。在此之前动作方向可能不对 ——
-          这是刻意的显式状态，不是 bug。下方「左右交换」开关用于标定。
-        </div>
-      )}
-
-      {vendor && !vendor.ok && (
-        <div className="banner error">
-          <strong>MediaPipe 本地资源缺失 {vendor.missing.length}/{vendor.checked}</strong>
-          <pre>{vendor.missing.join('\n')}</pre>
-          在仓库根目录执行：<code>node tools/sync-mediapipe.mjs</code>
-        </div>
-      )}
+    <main id="main-content" className="mocap-page">
+      <PageHeading eyebrow="把动作变成表达" title="动作工作室" description="捕捉你的动作，预览影伴的回应，保存为可以反复使用的动作。">
+        <span className={`state-badge state-${state}`} role="status">{STATE_LABEL[state]}</span>
+      </PageHeading>
+      <ol className="workflow-steps" aria-label="动作录入流程">
+        <li className={['camera-off', 'loading-model', 'detecting', 'error'].includes(state) ? 'is-current' : ''}><span>01</span><div><strong>连接摄像头</strong><small>站在画面中央，预览识别效果</small></div></li>
+        <li className={['ready', 'calibrating', 'countdown', 'recording'].includes(state) ? 'is-current' : ''}><span>02</span><div><strong>录制动作</strong><small>倒计时后开始，最长录制 10 秒</small></div></li>
+        <li className={['processing', 'reviewing', 'saving'].includes(state) ? 'is-current' : ''}><span>03</span><div><strong>裁剪与保存</strong><small>留下满意的片段，加入动作库</small></div></li>
+      </ol>
 
       {notice && (
         <div className={`banner ${notice.kind}`}>
@@ -864,182 +1023,51 @@ export default function MotionLibraryPage() {
         </div>
       )}
 
-      <div className="mocap-grid">
-        <section className="panel camera-panel">
-          <h2>摄像头</h2>
-          <CameraCapture
-            onFrame={handleFrame}
-            handleRef={cameraRef}
-            locked={state === 'recording' || state === 'countdown'}
-            onStatus={(s, d) => {
-              // ★ 注意守卫要同时允许 camera-off 与 loading-model：
-              //   session 的启动过程本身就会先报 'starting'（我们因此进入 loading-model），
-              //   若这里只认 camera-off，就再也晋升不到 detecting ——
-              //   表现为"徽章一直显示加载中"，而实际上摄像头已经跑起来了。
-              //   （这个 bug 是预检脚本抓出来的，真人上场时会立刻撞到。）
-              const notStarted = stateRef.current === 'camera-off' || stateRef.current === 'loading-model';
-              // 跳过校准时不要求"校准通过"才就绪 —— 摄像头一跑起来就能录
-              if (s === 'running' && notStarted) setStateBoth(skipCalibrationRef.current ? 'ready' : 'detecting');
-              else if (s === 'starting' && stateRef.current === 'camera-off') setStateBoth('loading-model');
-              else if (s === 'error') setStateBoth('error');
-              else if (s === 'stopped') setStateBoth('camera-off');
-              if (d && s === 'error') setNotice({ kind: 'error', text: d });
-            }}
-          />
-        </section>
-
-        <section className="panel preview-panel">
-          <h2>VRM 预览</h2>
-          <div className="preview-toolbar">
-            <label>
-              主角色
-              <AvatarSelect ariaLabel="主角色资产" value={primaryAvatar} onChange={setPrimaryAvatar} />
-            </label>
-            {twoChars && (
-              <label>
-                对照角色
-                <AvatarSelect ariaLabel="对照角色资产" value={secondAvatar} onChange={setSecondAvatar} />
-              </label>
-            )}
-            <label>
-              <input type="checkbox" checked={twoChars} onChange={(e) => setTwoChars(e.target.checked)} />
-              双角色对比
-            </label>
-            <label>
-              <input type="checkbox" checked={skeleton} onChange={(e) => setSkeleton(e.target.checked)} />
-              骨架
-            </label>
-            <button type="button" onClick={() => previewRef.current?.pause()}>
-              暂停
-            </button>
-            <button type="button" onClick={() => previewRef.current?.resume()}>
-              继续
-            </button>
-            <button type="button" onClick={() => previewRef.current?.stop()}>
-              停止
-            </button>
-            <button type="button" onClick={() => previewRef.current?.resetToBase()}>
-              恢复基础站姿
-            </button>
-          </div>
-          <MocapVrmPreview
-            ref={previewRef}
-            primaryUrl={primaryAvatar}
-            secondUrl={secondAvatar}
-            showSecond={twoChars}
-            onError={(m) =>
-              setNotice({
-                kind: 'warn',
-                text: `${m}${twoChars ? '（第二个角色需要先跑 node tools/fetch-assets.mjs）' : ''}`,
-              })
-            }
-          />
-          <div className="preview-status">
-            <span>回放 {clipSnapshot.state}</span>
-            <span>
-              {clipSnapshot.time.toFixed(2)}s / {clipSnapshot.duration.toFixed(2)}s
-            </span>
-            <span>
-              每帧 vrm.update{' '}
-              {previewRef.current?.getStatus().lastFrameUpdates ?? '—'} 次
-              {twoChars ? '（双角色应为 2）' : '（单角色应为 1）'}
-            </span>
-          </div>
-        </section>
-
+      <div
+        className="mocap-grid"
+        ref={gridRef}
+        style={{ '--split': `${split}%` } as React.CSSProperties}
+      >
         <section className="panel control-panel">
-          <h2>录制流程</h2>
+          <div className="section-heading"><h2>录制动作</h2><span className="section-note">保持全身入镜，动作自然连贯</span></div>
 
-          <div className="calibration-box">
-            <label
-              className="skip-calibration"
-              title="实测：修正量不能泛化 —— 标定那一帧变准、其它姿态反而更偏。所以默认跳过校准。"
-            >
-              <input
-                type="checkbox"
-                checked={skipCalibration}
-                onChange={(e) => toggleSkipCalibration(e.target.checked)}
-              />
-              跳过校准（默认，实测更准）
-            </label>
-            {skipCalibration && (
-              <div className="hint">
-                当前：<strong>未校准</strong> —— 角色直接跟随重定向输出。修正量只让标定那一帧变准，
-                其它姿态反而更偏（实测：用 90° 自然下垂标定后，T-pose 会被映射到偏离 identity 108°）。
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={startCalibration}
-              disabled={state === 'recording' || busy || skipCalibration}
-            >
-              校准（1.5 秒）
-            </button>
-            {state === 'calibrating' && (
-              <progress value={calibProgress} max={1}>
-                {Math.round(calibProgress * 100)}%
-              </progress>
-            )}
-            {calibration && (
-              <div className={calibration.ok ? 'ok' : 'bad'}>
-                {calibration.ok
-                  ? `校准通过｜检测率 ${(calibration.detectionRate * 100).toFixed(1)}%｜帧 ${calibration.acceptedFrames}/${calibration.totalFrames}｜修正量 ${calibration.maxCorrectionDeg.toFixed(1)}°（${calibration.worstBone}，正常范围 ${CALIBRATION_CORRECTION_OBSERVED_DEG.min}–${CALIBRATION_CORRECTION_OBSERVED_DEG.max}°）`
-                  : `未通过：${calibration.issues.join('；')}`}
-              </div>
-            )}
-            <label className="swap-toggle" title="切换后会自动作废校准，需要重新校准 1.5 秒">
-              <input type="checkbox" checked={swap} onChange={(e) => setSwap(e.target.checked)} />
-              左右交换（标定用）
-            </label>
-            {swap !== DEFAULT_SWAP && (
-              <span className="hint">
-                已偏离默认值（代码里的实测值是 {String(DEFAULT_SWAP)}）
-              </span>
+          {/* 动作同步诊断面板暂时隐藏（调轴向映射时再打开：把 SHOW_DIAGNOSTIC_PANEL 改为 true） */}
+          {SHOW_DIAGNOSTIC_PANEL && (
+          <div className="diagnostic-box">
+            <div>
+              <strong>动作同步诊断</strong>
+              <p>一次录下摄像头、关键点和 3D 角色，并保存逐帧解算数据。点击开始会自动启动摄像头。</p>
+              <p>建议依次做：右手前伸 → 左手前伸 → 手腕前后屈伸 → 双手交叉（交换前后顺序）。动作放慢，每段之间回到自然站姿。</p>
+            </div>
+            <div className="diagnostic-actions">
+              {diagnosticStatus !== 'recording' ? (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => void startDiagnostic()}
+                  disabled={diagnosticActive || !!pendingDiagnosticRef.current || ['recording', 'countdown', 'calibrating', 'processing', 'saving'].includes(state)}
+                >
+                  {diagnosticStatus === 'preparing' ? '准备中…' : '开始诊断录制'}
+                </button>
+              ) : (
+                <button type="button" className="danger" onClick={() => void stopDiagnostic()}>
+                  停止并保存
+                </button>
+              )}
+              {diagnosticStatus === 'recording' && <span className="mono">录制中 {(diagnosticElapsed / 1_000).toFixed(1)} / 90 秒 · {diagnosticRef.current?.frameCount ?? 0} 帧</span>}
+              {diagnosticStatus === 'saving' && <span>正在写入本机诊断目录…</span>}
+              {pendingDiagnosticRef.current && diagnosticStatus === 'error' && (
+                <button type="button" onClick={() => void uploadDiagnostic(pendingDiagnosticRef.current!)}>重试保存</button>
+              )}
+            </div>
+            {diagnosticError && <p className="diagnostic-error" role="alert">{diagnosticError}</p>}
+            {diagnosticSaved && (
+              <p className="diagnostic-saved" role="status">
+                已保存视频和逐帧数据：<code>{diagnosticSaved.path}</code>
+              </p>
             )}
           </div>
-
-          <div className="probe-row">
-            <label>
-              标定探针
-              <select
-                value={probeLabel}
-                onChange={(e) => setProbeLabel(e.target.value)}
-                disabled={probing}
-              >
-                {['抬右手', '抬左手', '屈右肘', '屈左肘', '头向自身左转', '头向自身右转', '右手前伸'].map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className={probing ? 'danger' : ''}
-              disabled={state !== 'detecting' && state !== 'ready' && state !== 'calibrating'}
-              onClick={() => {
-                if (!probing) {
-                  (window as unknown as { __mocapDebug?: { startProbe: () => string } }).__mocapDebug?.startProbe();
-                  setProbeResult(null);
-                  setProbing(true);
-                  setNotice({ kind: 'info', text: `探针已开始：慢速做「${probeLabel}」并重复 3 次，做完点「结束并输出」` });
-                } else {
-                  const r = (
-                    window as unknown as { __mocapDebug?: { stopProbe: () => ProbeSummary | null } }
-                  ).__mocapDebug?.stopProbe();
-                  setProbing(false);
-                  setProbeResult(r ? { ...r, label: probeLabel } : null);
-                  setNotice(null);
-                }
-              }}
-            >
-              {probing ? '结束并输出' : '开始'}
-            </button>
-            {probing && <span className="hint">采样中…慢速做动作，重复 3 次</span>}
-            {!probing && <span className="hint">用它把"哪个分量在动"变成数字，不用靠看</span>}
-          </div>
-
-          {probeResult && <ProbeTable result={probeResult} />}
+          )}
 
           <div className="record-box">
             <button
@@ -1069,6 +1097,103 @@ export default function MotionLibraryPage() {
               </div>
             )}
           </div>
+
+          <details className="advanced-panel capture-advanced">
+            <summary><span>高级设置与标定</span><span className="summary-note">校准 · 左右交换 · 探针</span></summary>
+            {!RETARGET_IS_MEASURED && <div className="banner warn"><span>轴向映射尚待真人验证。若角色的动作方向不一致，可使用下方左右交换与探针进行标定。</span></div>}
+          <div className="calibration-box">
+            <label
+              className="skip-calibration"
+              title="实测：修正量不能泛化 —— 标定那一帧变准、其它姿态反而更偏。所以默认跳过校准。"
+            >
+              <input
+                type="checkbox"
+                checked={skipCalibration}
+                onChange={(e) => toggleSkipCalibration(e.target.checked)}
+                disabled={diagnosticActive}
+              />
+              跳过校准（默认，实测更准）
+            </label>
+            {skipCalibration && (
+              <div className="hint">
+                当前：<strong>未校准</strong> —— 角色直接跟随重定向输出。修正量只让标定那一帧变准，
+                其它姿态反而更偏（实测：用 90° 自然下垂标定后，T-pose 会被映射到偏离 identity 108°）。
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={startCalibration}
+              disabled={state === 'recording' || busy || skipCalibration}
+            >
+              校准（1.5 秒）
+            </button>
+            {state === 'calibrating' && (
+              <progress value={calibProgress} max={1}>
+                {Math.round(calibProgress * 100)}%
+              </progress>
+            )}
+            {calibration && (
+              <div className={calibration.ok ? 'ok' : 'bad'}>
+                {calibration.ok
+                  ? `校准通过｜检测率 ${(calibration.detectionRate * 100).toFixed(1)}%｜帧 ${calibration.acceptedFrames}/${calibration.totalFrames}｜修正量 ${calibration.maxCorrectionDeg.toFixed(1)}°（${calibration.worstBone}，正常范围 ${CALIBRATION_CORRECTION_OBSERVED_DEG.min}–${CALIBRATION_CORRECTION_OBSERVED_DEG.max}°）`
+                  : `未通过：${calibration.issues.join('；')}`}
+              </div>
+            )}
+            <label className="swap-toggle" title="切换后会自动作废校准，需要重新校准 1.5 秒">
+              <input type="checkbox" checked={swap} onChange={(e) => setSwap(e.target.checked)} disabled={diagnosticActive} />
+              左右交换（标定用）
+            </label>
+            {swap !== DEFAULT_SWAP && (
+              <span className="hint">
+                已偏离默认值（代码里的实测值是 {String(DEFAULT_SWAP)}）
+              </span>
+            )}
+          </div>
+
+          <div className="probe-row">
+            <label>
+              标定探针
+              <select
+                value={probeLabel}
+                onChange={(e) => setProbeLabel(e.target.value)}
+                disabled={probing || diagnosticActive}
+              >
+                {['抬右手', '抬左手', '屈右肘', '屈左肘', '头向自身左转', '头向自身右转', '右手前伸'].map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className={probing ? 'danger' : ''}
+              disabled={diagnosticActive || (state !== 'detecting' && state !== 'ready' && state !== 'calibrating')}
+              onClick={() => {
+                if (!probing) {
+                  (window as unknown as { __mocapDebug?: { startProbe: () => string } }).__mocapDebug?.startProbe();
+                  setProbeResult(null);
+                  setProbing(true);
+                  setNotice({ kind: 'info', text: `探针已开始：慢速做「${probeLabel}」并重复 3 次，做完点「结束并输出」` });
+                } else {
+                  const r = (
+                    window as unknown as { __mocapDebug?: { stopProbe: () => ProbeSummary | null } }
+                  ).__mocapDebug?.stopProbe();
+                  setProbing(false);
+                  setProbeResult(r ? { ...r, label: probeLabel } : null);
+                  setNotice(null);
+                }
+              }}
+            >
+              {probing ? '结束并输出' : '开始'}
+            </button>
+            {probing && <span className="hint">采样中…慢速做动作，重复 3 次</span>}
+            {!probing && <span className="hint">用它把"哪个分量在动"变成数字，不用靠看</span>}
+          </div>
+
+          {probeResult && <ProbeTable result={probeResult} />}
+
+          </details>
 
           {recOutcome && (
             <div className="quality-box">
@@ -1116,8 +1241,92 @@ export default function MotionLibraryPage() {
           )}
         </section>
 
+        <section className="panel camera-panel">
+          <div className="section-heading"><h2>摄像头画面</h2><span className="section-note">本地识别 · 镜像预览</span></div>
+          <CameraCapture
+            onFrame={handleFrame}
+            handleRef={cameraRef}
+            locked={state === 'recording' || state === 'countdown' || diagnosticActive}
+            onStatus={(status) => {
+              setStateBoth(stateAfterCameraStatus(stateRef.current, status, skipCalibrationRef.current));
+            }}
+          />
+        </section>
+
+        <div
+          className="split-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整摄像头与影伴预览的宽度"
+          aria-valuenow={Math.round(split)}
+          tabIndex={0}
+          title="拖动调整左右区域宽度，双击恢复默认"
+          onPointerDown={startSplitDrag}
+          onDoubleClick={() => setSplit(DEFAULT_SPLIT)}
+          onKeyDown={onSplitKeyDown}
+        />
+
+        <section className="panel preview-panel">
+          <div className="section-heading"><h2>影伴预览</h2><span className="section-note">实时跟随与动作回放</span></div>
+          <div className="preview-toolbar">
+            <label>
+              主角色
+              <AvatarSelect ariaLabel="主角色资产" value={primaryAvatar} onChange={setPrimaryAvatar} disabled={diagnosticActive} />
+            </label>
+            {twoChars && (
+              <label>
+                对照角色
+                <AvatarSelect ariaLabel="对照角色资产" value={secondAvatar} onChange={setSecondAvatar} disabled={diagnosticActive} />
+              </label>
+            )}
+            <label>
+              <input type="checkbox" checked={twoChars} onChange={(e) => setTwoChars(e.target.checked)} disabled={diagnosticActive} />
+              双角色对比
+            </label>
+            <label>
+              <input type="checkbox" checked={skeleton} onChange={(e) => setSkeleton(e.target.checked)} />
+              骨架
+            </label>
+            <button type="button" onClick={() => previewRef.current?.pause()} disabled={diagnosticActive}>
+              暂停
+            </button>
+            <button type="button" onClick={() => previewRef.current?.resume()} disabled={diagnosticActive}>
+              继续
+            </button>
+            <button type="button" onClick={() => previewRef.current?.stop()} disabled={diagnosticActive}>
+              停止
+            </button>
+            <button type="button" onClick={() => previewRef.current?.resetToBase()} disabled={diagnosticActive}>
+              恢复基础站姿
+            </button>
+          </div>
+          <MocapVrmPreview
+            ref={previewRef}
+            primaryUrl={primaryAvatar}
+            secondUrl={secondAvatar}
+            showSecond={twoChars}
+            onError={(m) =>
+              setNotice({
+                kind: 'warn',
+                text: `${m}${twoChars ? '（第二个角色需要先跑 node tools/fetch-assets.mjs）' : ''}`,
+              })
+            }
+          />
+          <div className="preview-status">
+            <span>回放 {clipSnapshot.state}</span>
+            <span>
+              {clipSnapshot.time.toFixed(2)}s / {clipSnapshot.duration.toFixed(2)}s
+            </span>
+            <details className="preview-diagnostics"><summary>渲染诊断</summary><span>
+              每帧 vrm.update{' '}
+              {previewRef.current?.getStatus().lastFrameUpdates ?? '—'} 次
+              {twoChars ? '（双角色应为 2）' : '（单角色应为 1）'}
+            </span></details>
+          </div>
+        </section>
+
         <section className="panel library-panel">
-          <h2>动作库</h2>
+          <div className="section-heading"><div><h2>已保存的动作</h2><p>选择一个动作，在上方影伴中回放。</p></div><span className="count-label">{entries.length} 个动作</span></div>
           <MotionList
             entries={entries}
             selectedId={selectedId}
@@ -1177,11 +1386,11 @@ export default function MotionLibraryPage() {
               {busy ? '保存中…' : '保存到动作库'}
             </button>
           </div>
-          <p className="hint">
+          <details className="save-details"><summary>本地保存说明</summary><p className="hint">
             保存会写入 <code>web/public/clips/&lt;id&gt;.json</code> 并更新动作目录；
             原始关键点写在 <code>data/mocap/</code>（不进 git，仅本机可下载）。
             校验不通过时不会部分应用，原状态会保留。
-          </p>
+          </p></details>
         </footer>
       )}
     </main>
