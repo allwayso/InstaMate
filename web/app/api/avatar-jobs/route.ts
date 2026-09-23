@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     //   跑完状态变成 awaiting_continue，等用户看了那张图再决定要不要花后面 85 积分。
     const child = spawn(process.execPath, [join(repo, 'tools', 'avatar-job.mjs'), id, 'ref'], {
       cwd: repo, env: { ...process.env, TRIPO_API_KEY: tripo.key, TRIPO_BASE_URL: tripo.baseUrl },
-      detached: true, stdio: 'ignore',
+      detached: true, stdio: 'ignore', windowsHide: true,
     });
     await new Promise<void>((done, failed) => {
       child.once('spawn', done);

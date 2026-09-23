@@ -307,46 +307,53 @@ def save_state(run_dir: Path, state: dict):
 
 def stage_ref(run_dir: Path, state: dict, image: Path) -> dict:
     """① 上传原图  ② generate_image(t_pose) -> T-pose 参考图"""
-    print("\n" + "=" * 64)
-    print("阶段 ① 上传原始照片")
-    print("=" * 64)
+    gen_id = state.get("generate_image_task_id")
+    if not gen_id:
+        print("\n" + "=" * 64)
+        print("阶段 ① 上传原始照片")
+        print("=" * 64)
 
-    if not image.exists():
-        raise FileNotFoundError(f"找不到图片：{image}")
-    print(f"    {image}  {image.stat().st_size/1024:.0f} KB")
-    with open(image, "rb") as fh:
-        up = check(
-            requests.post(
-                f"{BASE_URL}/upload/sts",
-                headers=HEADERS,
-                files={"file": (image.name, fh, "application/octet-stream")},
-                timeout=180,
+        if not image.exists():
+            raise FileNotFoundError(f"找不到图片：{image}")
+        print(f"    {image}  {image.stat().st_size/1024:.0f} KB")
+        with open(image, "rb") as fh:
+            up = check(
+                requests.post(
+                    f"{BASE_URL}/upload/sts",
+                    headers=HEADERS,
+                    files={"file": (image.name, fh, "application/octet-stream")},
+                    timeout=180,
+                )
             )
-        )
-    token = up["data"]["image_token"]
-    state["source_image"] = str(image.resolve())
-    state["source_image_token"] = token
-    print(f"    image_token: {token}")
-    save_state(run_dir, state)
+        token = up["data"]["image_token"]
+        state["source_image"] = str(image.resolve())
+        state["source_image_token"] = token
+        print(f"    image_token: {token}")
+        save_state(run_dir, state)
 
-    print("\n" + "=" * 64)
-    print(f"阶段 ② 生成 T-pose 参考图（generate_image / template={IMAGE_TEMPLATE}）")
-    print("=" * 64)
-    payload = {
-        "type": "generate_image",
-        "model_version": IMAGE_MODEL_VERSION,
-        "prompt": IMAGE_PROMPT,
-        "template": IMAGE_TEMPLATE,
-        "t_pose": True,
-        "file": {"type": image.suffix.lstrip(".").lower(), "file_token": token},
-    }
-    gen_id = post_task(payload, "generate_image (t_pose)")
-    state["generate_image_task_id"] = gen_id
-    save_state(run_dir, state)
+        print("\n" + "=" * 64)
+        print(f"阶段 ② 生成 T-pose 参考图（generate_image / template={IMAGE_TEMPLATE}）")
+        print("=" * 64)
+        payload = {
+            "type": "generate_image",
+            "model_version": IMAGE_MODEL_VERSION,
+            "prompt": IMAGE_PROMPT,
+            "template": IMAGE_TEMPLATE,
+            "t_pose": True,
+            "file": {"type": image.suffix.lstrip(".").lower(), "file_token": token},
+        }
+        gen_id = post_task(payload, "generate_image (t_pose)")
+        state["generate_image_task_id"] = gen_id
+        save_state(run_dir, state)
+    else:
+        print(f"\n>>> 复用已有 T-pose 任务：{gen_id}")
 
-    result = wait(gen_id, "T-pose 参考图")
-    state["generate_image_result"] = result
-    save_state(run_dir, state)
+    result = state.get("generate_image_result")
+    if not result:
+        result = wait(gen_id, "T-pose 参考图")
+        state["generate_image_result"] = result
+        save_state(run_dir, state)
+
 
     files = download(result.get("output", {}), run_dir / "00_tpose_ref", {"image": "tpose_ref"})
     state["tpose_ref_files"] = [str(p) for p in files]
@@ -539,7 +546,9 @@ def main():
         run_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_state(run_dir)
-    state.setdefault("status", "running")
+    state["status"] = "running"
+    state.pop("error", None)
+    state.pop("failed_at", None)
 
     # ★ 原图以 state 里记录的为准，**不乱用 --image 的默认值**。
     #   踩过的坑：`--upto rig` 续跑时没传 --image，args.image 静默落回

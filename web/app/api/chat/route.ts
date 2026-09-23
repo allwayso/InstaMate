@@ -1,30 +1,12 @@
 import { NextResponse } from 'next/server';
 import { listStates } from '@/lib/states-store';
+import { localRequestOnly } from '@/lib/local-request';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const SESSION_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_MESSAGE_LENGTH = 20_000;
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
-
-function localRequestOnly(request: Request): NextResponse | null {
-  const host = new URL(request.url).hostname;
-  if (!LOCAL_HOSTS.has(host)) {
-    return NextResponse.json({ error: '对话接口仅供本机使用' }, { status: 403 });
-  }
-  const origin = request.headers.get('origin');
-  if (origin) {
-    try {
-      if (new URL(origin).host !== new URL(request.url).host) {
-        return NextResponse.json({ error: '跨源请求被拒绝' }, { status: 403 });
-      }
-    } catch {
-      return NextResponse.json({ error: 'Origin 不合法' }, { status: 403 });
-    }
-  }
-  return null;
-}
 
 function backendUrl(path: string): string {
   const base = process.env.MEMORY_API_URL?.replace(/\/+$/, '') || 'http://127.0.0.1:8000';

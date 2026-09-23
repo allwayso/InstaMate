@@ -151,7 +151,7 @@ export async function spawnAvatarJob(
   const child = spawn(process.execPath, [join(repo, 'tools', 'avatar-job.mjs'), id, stage], {
     cwd: repo, env: { ...process.env, ...env },
     // detached：自成进程组，POSIX 下才能整组杀；配合 taskkill /T 覆盖 Windows。
-    detached: true, stdio: 'ignore',
+    detached: true, stdio: 'ignore', windowsHide: true,
   });
   await new Promise<void>((done, failed) => {
     child.once('spawn', done);

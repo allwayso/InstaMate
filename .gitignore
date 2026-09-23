@@ -104,3 +104,7 @@ data/
 .pdfbuild/*.pdf
 .pdfbuild/*.png
 .pdfbuild/t*.html
+
+# 本地展示构建产物
+/output/
+/web/exports/

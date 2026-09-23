@@ -1,21 +1,16 @@
-import type { Metadata } from 'next';
-import Link from 'next/link';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
 import ShowcaseSequence from '@/components/showcase-sequence';
 import ShowcaseVideo from '@/components/showcase-video';
-import styles from './showcase.module.css';
+import styles from '@/app/showcase/showcase.module.css';
 
-export const metadata: Metadata = {
-  title: 'InstaMate | 重建独属于你的影伴',
-  description: '从照片和聊天记录出发，组装独属于你的 3D 数字影伴。',
-};
-
-export default function ShowcasePage() {
+function OfflineShowcase() {
   return (
     <main className={styles.page}>
-      <section className={styles.hero} aria-labelledby="showcase-title">
+      <section id="top" className={styles.hero} aria-labelledby="showcase-title">
         <div className={styles.heroBackdrop} aria-hidden="true" />
         <header className={styles.header}>
-          <Link className={styles.wordmark} href="/showcase">instamate</Link>
+          <a className={styles.wordmark} href="#top">instamate</a>
         </header>
 
         <div className={styles.heroContent}>
@@ -34,3 +29,5 @@ export default function ShowcasePage() {
     </main>
   );
 }
+
+createRoot(document.getElementById('app')!).render(<OfflineShowcase />);
