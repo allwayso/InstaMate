@@ -2,6 +2,12 @@
 
 /** 浏览器录音工具：getUserMedia + AudioWorklet 采集 PCM，编码为 16kHz 16bit 单声道 WAV */
 
+import {
+  classifyMicFailure,
+  collectAudioInputLabels,
+  describeMicFailure,
+} from './mic-diagnostics';
+
 const TARGET_SAMPLE_RATE = 16000;
 
 const WORKLET_CODE = `
@@ -113,7 +119,27 @@ export class PcmRecorder {
       this.context = null;
       if (this.workletUrl) URL.revokeObjectURL(this.workletUrl);
       this.workletUrl = null;
-      throw error;
+
+      // ★ 把浏览器的原始 DOMException 换成人能看懂的话。
+      //   原来直接往上抛，用户看到的是：
+      //       NotFoundError: Requested device not found
+      //   而这背后可能是五种完全不同的情况（没设备 / 没权限 / 被占用 /
+      //   参数不满足 / 非安全上下文），处理办法没有一条重合。
+      //
+      //   特别注意「没设备」这一种：在 Windows 上「外部麦克风」可以存在于
+      //   设备管理器、甚至能被 enumerateDevices 列出来，但状态是「未插入」，
+      //   getUserMedia 照样抛 NotFoundError —— 所以出错后补一次枚举，
+      //   把设备名列清楚，让用户知道问题在系统侧而不在页面侧。
+      const failure = classifyMicFailure(error);
+      const labels = await collectAudioInputLabels(() =>
+        navigator.mediaDevices.enumerateDevices(),
+      );
+      throw new Error(
+        describeMicFailure(failure, {
+          labels,
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
 

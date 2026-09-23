@@ -145,6 +145,9 @@ main {
   margin: 0 18px 12px;
   color: var(--danger);
   font-size: 13px;
+  /* 麦克风失败信息是多行的（原因 + 设备清单），要保住换行 */
+  white-space: pre-line;
+  line-height: 1.6;
 }
 
 .chat-form {

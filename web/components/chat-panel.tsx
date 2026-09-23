@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { PcmRecorder } from '@/lib/audio';
+import { describeMicFailure } from '@/lib/mic-diagnostics';
 import { triggerState } from '@/lib/state-events';
 import { speakText, stopSpeaking } from '@/lib/voice';
 import { PROFILE_CHANGE_EVENT, PROFILE_STORAGE_KEY } from '@/lib/profile-selection';
@@ -167,8 +168,13 @@ export default function ChatPanel() {
   async function toggleRecording() {
     if (recording) { await finishRecording(); return; }
     if (loading || sending || recognizing || recordingBusyRef.current) return;
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-      setVoiceError('麦克风需要 HTTPS 或 localhost。');
+    if (!window.isSecureContext) {
+      // 和「浏览器不支持」分开报：这两种的修法不同（换地址 vs 换浏览器）
+      setVoiceError(describeMicFailure('insecure'));
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError(describeMicFailure('unsupported'));
       return;
     }
     recordingBusyRef.current = true;
