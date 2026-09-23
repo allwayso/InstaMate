@@ -9,3 +9,7 @@ memory_data/
 analysis_output/
 chat_archives/
 profile_data/
+
+# pytest 的 basetemp（见下方说明）：本机默认 tmp 目录有 ACL 问题，
+# 必须用 --basetemp 指到别处；指在仓库里就加进来，别让它变成未跟踪文件。
+.pytest-tmp/
