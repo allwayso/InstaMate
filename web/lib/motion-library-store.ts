@@ -240,6 +240,83 @@ export function saveMotion(req: SaveMotionRequest): SaveMotionResult {
   }
 }
 
+// ── 删除 ───────────────────────────────────────────────────────────────────
+
+export interface DeleteMotionResult {
+  ok: boolean;
+  status: number;
+  error?: string;
+  /** 实际删掉的文件路径（供 UI/测试报告"到底动了什么"） */
+  removed?: string[];
+  /** 目录已经提交、但这些文件没能删掉（只是留了孤儿文件，不影响可用性） */
+  failed?: string[];
+}
+
+/**
+ * 从动作库里删掉一条。
+ *
+ * ★ 顺序与 saveMotion **相反**：先原子写 index.json（提交点），再删文件。
+ *
+ *   反过来（先删文件、后写目录）的失败模式很坏：目录写失败时文件已经没了，
+ *   于是留下「目录里有、文件不存在」的条目 —— 动作库页面对该条**打不开**，
+ *   而且从界面上看不出原因。
+ *
+ *   按当前顺序，最坏情况是「目录里没了、文件还在」= 孤儿文件：
+ *   不影响任何功能，只是占几百 KB 磁盘，而且随时可以再删一次。
+ *   **删不掉文件比删掉了却还挂在目录里安全得多。**
+ *
+ * 同时删除原始关键点（data/mocap/*.landmarks.json）：一段 5–10 MB，
+ * 留着没有用途（clip 已经烘好了）。要保留原始点的话这里就是唯一的改动点。
+ */
+export function deleteMotion(id: string): DeleteMotionResult {
+  const idErr = validateRequestedId(id);
+  if (idErr || !id) return { ok: false, status: 400, error: idErr ?? 'id 不合法' };
+
+  let index: { clips: ClipCatalogEntry[] };
+  try {
+    index = readIndex();
+  } catch (e) {
+    return { ok: false, status: 500, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  if (!index.clips.some((c) => c.id === id)) {
+    return { ok: false, status: 404, error: `动作库里没有 ${id}` };
+  }
+
+  // ── 提交点：目录先落地 ──
+  const nextIndex = { ...index, clips: index.clips.filter((c) => c.id !== id) };
+  const idxWrite = atomicWrite(INDEX_PATH, JSON.stringify(nextIndex, null, 2));
+  try {
+    renameSync(idxWrite.tmp, idxWrite.final);
+  } catch (e) {
+    try {
+      if (existsSync(idxWrite.tmp)) rmSync(idxWrite.tmp, { force: true });
+    } catch {
+      /* 清理失败不覆盖原始错误 */
+    }
+    return {
+      ok: false,
+      status: 500,
+      error: `目录写入失败，未删除任何文件：${e instanceof Error ? e.message : e}`,
+    };
+  }
+
+  // ── 提交点已过。下面失败只是孤儿文件，不回滚目录 ──
+  const removed: string[] = [];
+  const failed: string[] = [];
+  for (const p of [join(CLIPS_DIR, `${id}.json`), join(MOCAP_DIR, `${id}.landmarks.json`)]) {
+    try {
+      if (!existsSync(p)) continue;
+      rmSync(p, { force: true });
+      removed.push(p);
+    } catch {
+      failed.push(p);
+    }
+  }
+
+  return { ok: true, status: 200, removed, failed };
+}
+
 export function readLandmarks(id: string): MocapCaptureV1 | null {
   if (validateRequestedId(id) !== null || !id) return null;
   const p = join(MOCAP_DIR, `${id}.landmarks.json`);

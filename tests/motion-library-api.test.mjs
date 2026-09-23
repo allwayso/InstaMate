@@ -91,6 +91,21 @@ async function post(body) {
   return { status: res.status, json };
 }
 
+/** DELETE 一个动作（删除也是写操作，所以同样要带 origin） */
+async function del(id) {
+  const res = await fetch(`${BASE}/api/motion-library/${id}`, {
+    method: 'DELETE',
+    headers: { origin: BASE },
+  });
+  let json = null;
+  try {
+    json = await res.json();
+  } catch {
+    /* 可能是空体 */
+  }
+  return { status: res.status, json };
+}
+
 /**
  * ★ 注意：不能写成 `test(name, { skip: !available }, fn)`。
  *   测试注册是**即时**发生的，那时候 before 钩子还没跑、available 还是 false，
@@ -208,6 +223,53 @@ testFn('未指定 id 时自动生成 mocap-YYYYMMDD-HHmmss', async () => {
 });
 
 // ── 原始关键点 ───────────────────────────────────────────────────────────
+
+testFn('★ 删除：目录与磁盘都清掉，再删返回 404', async () => {
+  const id = `api-del-${Date.now().toString(36)}`;
+  const made = await post({ requestedId: id, displayName: '待删', clip: goodClip() });
+  assert.equal(made.status, 201, JSON.stringify(made.json));
+
+  const first = await del(id);
+  assert.equal(first.status, 200, JSON.stringify(first.json));
+  assert.ok(
+    (first.json.removed ?? []).some((p) => p.endsWith(`${id}.json`)),
+    `没有报告删掉了 clip 文件：${JSON.stringify(first.json.removed)}`,
+  );
+
+  assert.ok(!existsSync(`${CLIPS_DIR}/${id}.json`), 'clip 文件应当已从磁盘删除');
+  const list = await (await fetch(`${BASE}/api/motion-library`)).json();
+  assert.ok(!list.clips.some((c) => c.id === id), '目录里不该还有这条');
+
+  const second = await del(id);
+  assert.equal(second.status, 404, '再删一次应当是 404');
+});
+
+testFn('★ 删除：拒绝路径穿越的 id（它会被拼进文件路径）', async () => {
+  // 判据是"没有被当成一次合法删除"，而不是某个具体状态码：
+  //   · 400 = 我们的 validateRequestedId 拒了（含 `/`、`.`、白名单之外的字符）
+  //   · 405 = 更早一层：`. ` 让 URL 规范化成 `/api/motion-library/`，那里没有 DELETE
+  // 两种都说明请求没碰到删除逻辑。测试不该把框架层的行为写死成某一个码。
+  for (const bad of ['..%2F..%2Fetc%2Fpasswd', 'a%2Fb', '.', 'a.b', 'A-B']) {
+    const { status, json } = await del(bad);
+    assert.ok(
+      [400, 404, 405].includes(status),
+      `${bad} 应当被拒，实际 ${status}`,
+    );
+    assert.notEqual(json?.ok, true, `${bad} 不该返回成功`);
+  }
+});
+
+testFn('★ 删除：目录里没有的 id 返回 404，且不动目录', async () => {
+  const before = await (await fetch(`${BASE}/api/motion-library`)).json();
+  const { status } = await del('this-id-does-not-exist-xyz');
+  assert.equal(status, 404);
+  const after = await (await fetch(`${BASE}/api/motion-library`)).json();
+  assert.equal(
+    JSON.stringify(after.clips),
+    JSON.stringify(before.clips),
+    '404 的删除请求不该改动目录',
+  );
+});
 
 testFn('没有原始关键点时下载返回 404，并给出人能看懂的原因', async () => {
   const res = await fetch(`${BASE}/api/motion-library/${'nonexistent-' + Date.now().toString(36)}/landmarks`);

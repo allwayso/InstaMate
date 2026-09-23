@@ -278,6 +278,43 @@ test('多骨骼输入：并集被完整取到，且各自独立重采样', () =>
 
 // ── 5. 录制统计 ───────────────────────────────────────────────────────
 
+test('★★ 帧时间戳是【绝对】时刻时也必须烘出动作（相对 in/out 的口径换算）', () => {
+  // 复盘：`inMs`/`outMs` 的契约是"相对录制起点"，而页面传进来的
+  // `frames[].timestampMs` 是 `performance.now()` 的**绝对**时刻（几十万毫秒）。
+  // 早先 buildClip 把相对值直接当绝对用，于是 samplePoseAt 的边界分支
+  // 对每一帧都返回 frames[0] —— 整段 clip 变成一张静止照片。
+  //
+  // 它在生产路径上活了很久，三次真人录制全是 0.0000° 变化的 clip，
+  // 而测试全绿：因为夹具用的是 0/33/66… 这种小时间戳，
+  // 恰好落在"两种口径重合"的区间里，**测不出来**。
+  //
+  // 所以这条测试刻意用真实量级的时间戳（开页 8 分钟后录制）。
+  const T0 = 503_169; // 实测值：mocap-20260922-201528 的首帧时间戳
+  const frames = [];
+  for (let i = 0; i < 40; i++) {
+    frames.push({
+      timestampMs: T0 + i * 33,
+      pose: { rightUpperArm: rotQ('Z', (40 * i) / 39) }, // 每帧都在动
+    });
+  }
+
+  const res = buildClip({ name: 'absolute-ts', frames, inMs: 0, outMs: 33 * 39, boneList: BONE_LIST, targetBones: BONE_LIST });
+  assert.equal(res.ok, true, res.ok ? '' : res.issues.map((x) => x.msg).join('; '));
+
+  const track = res.clip.bones.rightUpperArm;
+  assert.ok(track, '没有 rightUpperArm 轨道');
+  const maxDiff = (a, b) =>
+    2 * Math.acos(Math.min(1, Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]))) * (180 / Math.PI);
+  let maxStep = 0;
+  for (let i = 1; i < track.length; i++) maxStep = Math.max(maxStep, maxDiff(track[i - 1], track[i]));
+  assert.ok(maxStep > 0.5, `clip 被冻住了：最大单帧变化仅 ${maxStep.toFixed(4)}°`);
+  assert.ok(maxDiff(track[0], track[track.length - 1]) > 20, '首末帧几乎没有差别');
+
+  // 帧数与时长仍按【相对】区间算，不能被绝对口径带偏
+  assert.equal(res.clip.frameCount, 40);
+  assert.ok(Math.abs(res.clip.duration - 39 / 30) < 1e-9, `时长算错：${res.clip.duration}`);
+});
+
 function mkRecFrame(t, { tracked = true, lost = [] } = {}) {
   return { timestampMs: t, pose: { ...BASE_STANDING_POSE }, tracked, lostBones: lost };
 }

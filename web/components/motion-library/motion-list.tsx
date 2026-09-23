@@ -23,6 +23,8 @@ interface Props {
   onPlay: (id: string) => void;
   onDownloadClip: (id: string) => void;
   onDownloadLandmarks: (id: string) => void;
+  /** 删除：会同时清掉原始关键点（data/mocap/*.landmarks.json，单段 5–10MB） */
+  onDelete: (id: string, name: string) => void;
   onImport: (file: File) => void;
   /** 正在播放的动作 id（高亮用） */
   playingId?: string | null;
@@ -63,12 +65,20 @@ export default function MotionList({
   onPlay,
   onDownloadClip,
   onDownloadLandmarks,
+  onDelete,
   onImport,
   playingId,
   busy,
   landmarksAvailable,
 }: Props) {
   const [query, setQuery] = useState('');
+  /**
+   * 两步确认的中间态：先点「删除」把该行按钮变成「确认删除」，再点一次才真删。
+   *
+   * 不用 window.confirm：删除会连原始关键点一起清掉（5–10MB，不可恢复），值得一次确认；
+   * 而浏览器弹窗会**阻塞自动化点击测试**（要额外处理 dialog 事件）。
+   */
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
@@ -183,6 +193,27 @@ export default function MotionList({
                     }}
                   >
                     原始点
+                  </button>
+                  <button
+                    type="button"
+                    className={confirmingId === e.id ? 'danger' : undefined}
+                    data-confirm={confirmingId === e.id ? 'yes' : 'no'}
+                    title={
+                      confirmingId === e.id
+                        ? '再点一次即删除（会同时清掉原始关键点，不可恢复）'
+                        : '从动作库删除这条（会同时清掉原始关键点）'
+                    }
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      if (confirmingId === e.id) {
+                        setConfirmingId(null);
+                        onDelete(e.id, e.name);
+                      } else {
+                        setConfirmingId(e.id);
+                      }
+                    }}
+                  >
+                    {confirmingId === e.id ? '确认删除' : '删除'}
                   </button>
                 </td>
               </tr>
