@@ -1,3 +1,28 @@
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 本机凭据；示例配置应随源码提交
+.env*
+!.env.example
+!.env.*.example
+*.pem
+*.p12
+*.pfx
+
+# 各语言的本地依赖、缓存和日志
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+*.tsbuildinfo
+
 .pdfbuild/raw.md
 .pdfbuild/raw.html
 .pdfbuild/proposal.html
@@ -25,6 +50,8 @@ web/public/vendor/
 # 动作本体（web/public/clips/<id>.json，约 100 KB）仍然入库，它是团队共享资产。
 # 代价：新克隆后动作库页面的「下载原始关键点」不可用，页面上会标注「仅本机」。
 data/mocap/
+data/states/
+data/avatar-jobs/
 
 # 联网调研的原始结果，与实现无关
 .firecrawl/
