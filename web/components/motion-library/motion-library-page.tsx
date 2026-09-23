@@ -137,9 +137,6 @@ export default function MotionLibraryPage() {
   const [probing, setProbing] = useState(false);
   const [probeLabel, setProbeLabel] = useState('抬右手');
   const [probeResult, setProbeResult] = useState<ProbeSummary | null>(null);
-
-  // ── 左右分栏（摄像头 | 影伴预览）──────────────────────────────────────
-  // split 是左栏宽度百分比；右侧影伴预览拿走剩余空间（它是主角）。
   const [split, setSplit] = useState(DEFAULT_SPLIT);
   const gridRef = useRef<HTMLDivElement | null>(null);
 
@@ -148,7 +145,7 @@ export default function MotionLibraryPage() {
       const saved = Number(localStorage.getItem(SPLIT_STORAGE_KEY));
       if (Number.isFinite(saved) && saved >= SPLIT_MIN && saved <= SPLIT_MAX) setSplit(saved);
     } catch {
-      /* 隐私模式下 localStorage 不可用，用默认值即可 */
+      // localStorage may be unavailable in privacy mode.
     }
   }, []);
 
@@ -156,21 +153,21 @@ export default function MotionLibraryPage() {
     try {
       localStorage.setItem(SPLIT_STORAGE_KEY, split.toFixed(1));
     } catch {
-      /* 同上，忽略 */
+      // Keep the in-memory preference when persistence is unavailable.
     }
   }, [split]);
 
-  const startSplitDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  const startSplitDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const grid = gridRef.current;
-    if (!grid || e.button !== 0) return;
-    e.preventDefault();
-    const handle = e.currentTarget;
+    if (!grid || event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
     const rect = grid.getBoundingClientRect();
     handle.classList.add('is-dragging');
-    handle.setPointerCapture(e.pointerId);
-    const onMove = (ev: PointerEvent) => {
-      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
-      setSplit(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct)));
+    handle.setPointerCapture(event.pointerId);
+    const onMove = (moveEvent: PointerEvent) => {
+      const percentage = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+      setSplit(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, percentage)));
     };
     const onUp = () => {
       handle.classList.remove('is-dragging');
@@ -180,11 +177,11 @@ export default function MotionLibraryPage() {
     window.addEventListener('pointerup', onUp, { once: true });
   }, []);
 
-  const onSplitKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'ArrowLeft') setSplit((s) => Math.max(SPLIT_MIN, s - 2));
-    else if (e.key === 'ArrowRight') setSplit((s) => Math.min(SPLIT_MAX, s + 2));
+  const onSplitKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowLeft') setSplit((value) => Math.max(SPLIT_MIN, value - 2));
+    else if (event.key === 'ArrowRight') setSplit((value) => Math.min(SPLIT_MAX, value + 2));
     else return;
-    e.preventDefault();
+    event.preventDefault();
   }, []);
 
   // ── 管线对象（用 ref：每帧都要访问，不能走 state）────────────────────
