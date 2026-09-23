@@ -1,0 +1,23 @@
+{
+  "version": "0.5.1675471629",
+  "packageDir": "web/node_modules/@mediapipe/holistic",
+  "vendorDir": "web/public/vendor/mediapipe/holistic",
+  "urlPath": "/vendor/mediapipe/holistic",
+  "directFiles": [
+    "holistic.binarypb",
+    "holistic_solution_packed_assets_loader.js",
+    "holistic_solution_simd_wasm_bin.js",
+    "holistic_solution_wasm_bin.js",
+    "pose_landmark_lite.tflite",
+    "pose_landmark_full.tflite"
+  ],
+  "loaderFiles": [
+    "holistic_solution_packed_assets.data",
+    "holistic_solution_simd_wasm_bin.wasm",
+    "holistic_solution_simd_wasm_bin.data",
+    "holistic_solution_wasm_bin.wasm"
+  ],
+  "skippedFiles": [
+    { "file": "pose_landmark_heavy.tflite", "reason": "仅 modelComplexity:2 需要，我们固定用 1(full)" }
+  ]
+}

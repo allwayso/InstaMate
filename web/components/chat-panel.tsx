@@ -2,13 +2,19 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { PcmRecorder } from '@/lib/audio';
+import { describeMicFailure } from '@/lib/mic-diagnostics';
 import { triggerState } from '@/lib/state-events';
 import { speakText, stopSpeaking } from '@/lib/voice';
 import { PROFILE_CHANGE_EVENT, PROFILE_STORAGE_KEY } from '@/lib/profile-selection';
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string; source?: 'voice'; triggered?: string[] };
+type ChatMessage = { role: 'user' | 'assistant'; content: string; source?: 'voice'; triggered?: string[]; localOnly?: boolean };
 type ChatTrigger = {
   id: string; name: string; emotion: string; duration: number | null; loop: boolean; clip_id: string | null;
+};
+/** 发给后端的可用动作。字段与后端 `PlayableState` 一一对应。 */
+type PlayableStatePayload = {
+  id: string; name: string; trigger_words: string[]; emotion: string;
+  duration: number | null; loop: boolean; clip_id: string | null;
 };
 const STORAGE_KEY = 'instamate-chat-session-v1';
 const newSessionId = () => 'session-' + crypto.randomUUID();
@@ -26,11 +32,42 @@ export default function ChatPanel() {
   const [profiles, setProfiles] = useState<{ profile_id: string; target_speaker: string }[]>([]);
   const [error, setError] = useState('');
   const [voiceError, setVoiceError] = useState('');
-  const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<PcmRecorder | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordingBusyRef = useRef(false);
   const sendingRef = useRef(false);
+  /** 上一次取到的可用动作。网络失败时回退用它，避免因为一个附属请求失败而发不出消息。 */
+  const statesRef = useRef<PlayableStatePayload[]>([]);
+
+  /**
+   * 每次发消息前重新拉一次状态库。
+   *
+   * 为什么不缓存到组件里：用户会在 /states 页改触发词、绑 clip、加新动作，
+   * 改完回到聊天页应该**立刻**按新的来，而不是要刷新页面。
+   * 这个请求很便宜（读一个本地 JSON），而发消息本来就要等模型，多这一趟看不出来。
+   */
+  async function refreshStates(): Promise<PlayableStatePayload[]> {
+    try {
+      const response = await fetch('/api/states', { cache: 'no-store' });
+      const data = (await response.json()) as { states?: PlayableStatePayload[] };
+      const list = Array.isArray(data.states) ? data.states : [];
+      const mapped = list.map((state) => ({
+        id: state.id,
+        name: state.name,
+        trigger_words: state.trigger_words ?? [],
+        emotion: state.emotion ?? 'neutral',
+        duration: state.duration ?? null,
+        loop: state.loop ?? false,
+        clip_id: state.clip_id ?? null,
+      }));
+      statesRef.current = mapped;
+      return mapped;
+    } catch {
+      return statesRef.current;
+    }
+  }
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -76,7 +113,10 @@ export default function ChatPanel() {
     return () => controller.abort();
   }, [sessionId]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages]);
+  useEffect(() => {
+    const list = messagesRef.current;
+    list?.scrollTo({ top: list.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+  }, [messages, sending, recognizing]);
 
   async function submitMessage(message: string, source?: 'voice') {
     const text = message.trim();
@@ -88,15 +128,23 @@ export default function ChatPanel() {
     setSending(true);
     setMessages((current) => [...current, { role: 'user', content: text, source }]);
     try {
+      // ★ 把可用动作一起发给后端 —— **这是对话触发的唯一入口**。
+      //   没有它，后端 `request.states` 恒为空：既匹配不到触发词，
+      //   也不会把 play_state 工具绑给模型，于是动作永远不会在对话里发生。
+      //   （这一段之前就是缺的，所以整条链路看着完整、实际从不触发。）
+      const states = await refreshStates();
       const response = await fetch('/api/chat', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: text, profile_id: profileId || null }),
+        body: JSON.stringify({
+          session_id: sessionId, message: text, profile_id: profileId || null, states,
+        }),
       });
-      const data = await response.json() as { answer?: string; triggers?: ChatTrigger[]; error?: string };
+      const data = await response.json() as { answer?: string; triggers?: ChatTrigger[]; error?: string; local_only?: boolean };
       if (!response.ok || typeof data.answer !== 'string') throw new Error(data.error ?? '对话失败');
       const triggers = Array.isArray(data.triggers) ? data.triggers : [];
       setMessages((current) => [...current, {
         role: 'assistant', content: data.answer!, triggered: triggers.map((trigger) => trigger.name),
+        localOnly: data.local_only === true,
       }]);
       for (const trigger of triggers) {
         triggerState({
@@ -104,7 +152,7 @@ export default function ChatPanel() {
           clipId: trigger.clip_id, emotion: trigger.emotion,
         }, 'chat');
       }
-      if (voiceOn && data.answer) {
+      if (voiceOn && data.answer && !data.local_only) {
         void speakText(data.answer).catch((cause: unknown) =>
           setVoiceError(cause instanceof Error ? cause.message : '语音播报失败'));
       }
@@ -162,8 +210,13 @@ export default function ChatPanel() {
   async function toggleRecording() {
     if (recording) { await finishRecording(); return; }
     if (loading || sending || recognizing || recordingBusyRef.current) return;
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-      setVoiceError('麦克风需要 HTTPS 或 localhost。');
+    if (!window.isSecureContext) {
+      // 和「浏览器不支持」分开报：这两种的修法不同（换地址 vs 换浏览器）
+      setVoiceError(describeMicFailure('insecure'));
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError(describeMicFailure('unsupported'));
       return;
     }
     recordingBusyRef.current = true;
@@ -194,7 +247,7 @@ export default function ChatPanel() {
   return (
     <section className="chat-panel" aria-label="影伴对话">
       <div className="chat-panel-head">
-        <div><h2>和影伴聊天</h2><p>文字和语音共用会话记忆；触发的状态会在角色身上播放。</p>
+        <div><span className="eyebrow">一段新的日常</span><h2>和影伴聊聊</h2>
           <label className="chat-profile">人物档案
             <select value={profileId} onChange={(event) => {
               const next = event.target.value;
@@ -212,34 +265,43 @@ export default function ChatPanel() {
         </div>
         <button type="button" onClick={newConversation} disabled={!sessionId || sending || recording || recognizing}>新对话</button>
       </div>
-      <div className="chat-messages" role="log" aria-live="polite">
+      <div className="chat-messages" role="log" aria-live="polite" ref={messagesRef}>
         {loading && <p className="chat-placeholder">正在读取对话…</p>}
-        {!loading && messages.length === 0 && <p className="chat-placeholder">发一条消息，或点麦克风说话。</p>}
+        {!loading && messages.length === 0 && <div className="chat-empty">
+          <span className="companion-symbol" aria-hidden="true"><i /><i /></span>
+          <h3>从一句你好开始</h3>
+          <p>打字，或用声音分享此刻。<br />你们的对话会被记住。</p>
+          <div className="chat-suggestions">
+            {['你好，认识一下吧', '今天有什么开心的事？'].map((text) => <button key={text} type="button" onClick={() => { setDraft(text); draftRef.current?.focus(); }}>{text}<span aria-hidden="true">↗</span></button>)}
+          </div>
+        </div>}
         {messages.map((item, index) => (
           <div key={index} className={'chat-message ' + item.role}>
             <span>{item.role === 'user' ? (item.source === 'voice' ? '你 · 语音' : '你') : '影伴'}</span>
             <p>{item.content}</p>
             {!!item.triggered?.length && <small>已触发：{item.triggered.join('、')}</small>}
+            {item.localOnly && <small>本地动作回应 · 配置模型后可自由聊天</small>}
           </div>
         ))}
         {sending && <p className="chat-placeholder">影伴正在回复…</p>}
         {recognizing && <p className="chat-placeholder">正在转写语音…</p>}
-        <div ref={endRef} />
       </div>
       {error && <p className="chat-error" role="alert">{error}</p>}
       {voiceError && <p className="chat-error" role="alert">{voiceError}</p>}
       <form className="chat-form" onSubmit={send}>
+        <div className="composer-status" role="status">{recording ? '正在录音 · 再次点击麦克风即可发送' : recognizing ? '正在将声音转成文字…' : '文字或语音，都能触发角色回应'}</div>
         <button type="button" className={'chat-mic' + (recording ? ' is-recording' : '')}
           onClick={() => void toggleRecording()} disabled={loading || sending || recognizing}
-          aria-label={recording ? '停止录音并发送' : '开始语音输入'}>{recording ? '■ 停止' : '🎤 录音'}</button>
-        <textarea aria-label="输入消息" value={draft} disabled={recording || recognizing}
+          aria-pressed={recording} aria-label={recording ? '停止录音并发送' : '开始语音输入'}><span className="mic-symbol" aria-hidden="true" />{recording ? '停止录音' : '语音'}</button>
+        <textarea ref={draftRef} aria-label="输入消息" value={draft} disabled={recording || recognizing}
           onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown}
-          placeholder="输入消息；Enter 发送，Shift+Enter 换行" maxLength={20_000} rows={3} />
+          placeholder="想和影伴说点什么？" maxLength={20_000} rows={3} />
         <div className="chat-form-actions">
           <button type="submit" disabled={!draft.trim() || !sessionId || loading || sending || recording || recognizing}>发送</button>
           <button type="button" onClick={() => { if (voiceOn) stopSpeaking(); setVoiceOn(!voiceOn); }}
-            aria-label={voiceOn ? '关闭语音播报' : '开启语音播报'}>{voiceOn ? '🔊 播报开' : '🔇 播报关'}</button>
+            aria-pressed={voiceOn} aria-label={voiceOn ? '关闭语音播报' : '开启语音播报'}>{voiceOn ? '播报已开' : '播报已关'}</button>
         </div>
+        <span className="composer-hint">Enter 发送 · Shift + Enter 换行</span>
       </form>
     </section>
   );

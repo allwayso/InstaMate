@@ -38,7 +38,20 @@ async function forward(path: string, init?: RequestInit): Promise<NextResponse> 
       cache: 'no-store',
       signal: AbortSignal.timeout(90_000),
     });
-    const body = await response.json().catch(() => ({ error: '对话服务返回了无效响应' }));
+    const body = await response.json().catch(() => ({
+      error: response.ok
+        ? '对话服务返回的数据格式有误'
+        : `对话服务处理失败（HTTP ${response.status}），请检查 Python 服务日志`,
+    }));
+    if (!response.ok && body && typeof body === 'object') {
+      const detail = 'detail' in body ? body.detail : null;
+      const error = 'error' in body ? body.error : null;
+      return NextResponse.json({ error: typeof error === 'string' ? error :
+        typeof detail === 'string' ? detail : `对话服务处理失败（HTTP ${response.status}）` }, {
+        status: response.status,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
     return NextResponse.json(body, {
       status: response.status,
       headers: { 'cache-control': 'no-store' },

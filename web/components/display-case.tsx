@@ -76,7 +76,6 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
 
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<StageInfo | null>(null);
-  const [hudOpen, setHudOpen] = useState(true);
   const [shiftPan, setShiftPan] = useState(false);
 
   const [catalog, setCatalog] = useState<ClipCatalogEntry[]>([]);
@@ -130,7 +129,7 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1d24);
+    scene.background = new THREE.Color(0x1b2326);
     const camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 100);
 
     // --- 环绕检视 ---
@@ -169,14 +168,28 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
     window.addEventListener('blur', onBlur);
     document.addEventListener('visibilitychange', onVisibility);
 
-    const resetView = () => {
+    let frameBounds: { size: THREE.Vector3; center: THREE.Vector3 } | null = null;
+    const frameCharacter = () => {
+      if (!frameBounds) return;
+      const { size, center } = frameBounds;
+      const halfFov = (camera.fov * Math.PI) / 360;
+      const fitHeight = size.y / (2 * Math.tan(halfFov));
+      const fitWidth = size.x / (2 * Math.tan(halfFov) * camera.aspect);
+      const distance = Math.max(fitHeight, fitWidth) * 1.25;
       const damping = controls.enableDamping;
-      controls.enableDamping = false; // 非阻尼分支会在 update() 末尾清零 _panOffset/_sphericalDelta
-      controls.reset();
+      controls.enableDamping = false;
+      controls.update(); // Clear pending orbit deltas before reframing.
+      camera.position.set(center.x, center.y + size.y * 0.04, center.z + distance);
+      camera.near = Math.max(0.01, distance / 100);
+      camera.far = distance * 40;
+      camera.updateProjectionMatrix();
+      controls.target.copy(center);
+      controls.maxDistance = distance * 10;
       controls.update();
+      controls.saveState();
       controls.enableDamping = damping;
     };
-    resetViewRef.current = resetView;
+    resetViewRef.current = frameCharacter;
 
     // --- 三点光 ---
     const key = new THREE.DirectionalLight(0xffffff, 2.4);
@@ -215,6 +228,9 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
 
         // 待机姿态 = 基础站姿（双臂自然下垂），**不是**参考姿态（参考姿态是 T-pose）
         runtime.applyBasePose();
+        // Frame the visible resting pose, not the loader's wider T-pose bounds.
+        runtime.commit(0);
+        result.root.updateMatrixWorld(true);
 
         // 骨架辅助线（默认隐藏，用按钮开）
         const sk = new THREE.SkeletonHelper(result.vrm.scene);
@@ -228,19 +244,8 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
         const center = box.getCenter(new THREE.Vector3());
         helpers.scale.setScalar(Math.max(0.4, size.y * 0.25));
 
-        const fovRad = (camera.fov * Math.PI) / 180;
-        const fitHeight = size.y / (2 * Math.tan(fovRad / 2));
-        const fitWidth = size.x / (2 * Math.tan(fovRad / 2) * camera.aspect);
-        const distance = Math.max(fitHeight, fitWidth) * 1.45;
-
-        camera.position.set(center.x, center.y + size.y * 0.04, center.z + distance);
-        camera.near = Math.max(0.01, distance / 100);
-        camera.far = distance * 40;
-        camera.updateProjectionMatrix();
-        controls.target.copy(center);
-        controls.maxDistance = distance * 10;
-        controls.update();
-        controls.saveState();
+        frameBounds = { size, center };
+        frameCharacter();
 
         key.target.position.set(0, center.y, 0);
         key.target.updateMatrixWorld();
@@ -492,14 +497,16 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
+      frameCharacter();
     };
-    window.addEventListener('resize', onResize);
+    const resizeObserver = new ResizeObserver(onResize);
+    resizeObserver.observe(mount);
 
     return () => {
       cancelled = true;
       unsubscribeState();
       cancelAnimationFrame(raf);
-      window.removeEventListener('resize', onResize);
+      resizeObserver.disconnect();
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
@@ -539,37 +546,70 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
   const selected = catalog.find((c) => c.id === selectedId) ?? null;
 
   return (
-    <div className="stage">
-      <div className="stage-canvas" ref={mountRef} />
-
-      <div className={`stage-hud${hudOpen ? '' : ' is-collapsed'}`}>
-        <button
-          type="button"
-          className="hud-collapse"
-          aria-expanded={hudOpen}
-          onClick={() => setHudOpen((v) => !v)}
-        >
-          {hudOpen ? '收起面板 ▸' : '◂ 调试面板'}
-        </button>
-
-        {hudOpen && (
-          <>
-            <strong>G0 · 静态资产</strong>
-
+    <section className="stage" aria-label="角色预览与动作控制">
+      <div className="stage-topbar">
+        <label className="stage-avatar"><span className="eyebrow">当前影伴</span>
+          <AvatarSelect className="hud-select" ariaLabel="角色资产" value={avatarUrl} onChange={setAvatarUrl} />
+        </label>
+        <button type="button" className="quiet-button" onClick={() => resetViewRef.current?.()}>归位视角</button>
+      </div>
+      <div className="stage-view">
+        <div className="stage-canvas" ref={mountRef} />
+        {!info && !error && <div className="stage-load-status" role="status">正在迎接你的影伴…</div>}
+        <div className="stage-caption"><span className="status-dot" />{error ? '角色加载失败' : info ? '影伴已就绪' : '正在加载'}<span>拖动旋转 · 滚轮缩放</span></div>
+      </div>
+      {error && <div className="inline-error" role="alert"><strong>暂时无法加载角色</strong><p>{error}</p></div>}
+      <div className="stage-controls">
+        <div className="stage-play-row">
+          <label className="stage-motion"><span>动作</span>
+            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} aria-label="动作选择">
+              <option value="">选择一个动作</option>
+              {catalog.map((c) => <option key={c.id} value={c.id}>{c.name}{c.source === 'imported' ? ' · 导入' : ''}</option>)}
+            </select>
+          </label>
+          <div className="transport-controls" aria-label="动作播放控制">
+            <button type="button" className="primary" onClick={() => apiRef.current?.play(selectedId)} disabled={!selectedId}>播放</button>
+            <button type="button" onClick={() => apiRef.current?.pause()}>暂停</button>
+            <button type="button" onClick={() => apiRef.current?.resume()}>继续</button>
+            <button type="button" onClick={() => apiRef.current?.stop()}>停止</button>
+          </div>
+          <label className="hud-check"><input type="checkbox" checked={loop} onChange={(e) => apiRef.current?.setLoop(e.target.checked)} />循环</label>
+        </div>
+        <div className="stage-timeline">
+          <input className="hud-range" type="range" min={0} max={Math.max(snapshot?.duration ?? 0, 0.001)} step={0.01}
+            value={snapshot?.time ?? 0} onChange={(e) => apiRef.current?.seek(Number(e.target.value))} aria-label="时间轴" />
+          <span>{(snapshot?.time ?? 0).toFixed(2)} / {(snapshot?.duration ?? 0).toFixed(2)} s</span>
+        </div>
+        {clipError && <div className="inline-error" role="alert"><strong>动作未应用，已保留当前姿态</strong><p>{clipError}</p></div>}
+      </div>
+      <details className="advanced-panel stage-details">
+        <summary><span>角色与动作设置</span><span className="summary-note">骨架 · 资产信息 · 导入</span></summary>
+        <div className="stage-settings-grid">
+          <div className="stage-settings-actions">
+            <h3>动作与视角</h3>
+            <label className="hud-check"><input type="checkbox" checked={showSkeleton} onChange={(e) => apiRef.current?.toggleSkeleton(e.target.checked)} />显示骨架辅助线</label>
             <div className="hud-row">
-              <AvatarSelect
-                className="hud-select"
-                ariaLabel="角色资产"
-                value={avatarUrl}
-                onChange={setAvatarUrl}
-              />
+              <button type="button" onClick={() => apiRef.current?.applyBase()}>恢复基础站姿</button>
+              <button type="button" onClick={() => apiRef.current?.applyRest()}>参考姿态</button>
             </div>
-            {error ? (
-              <div className="hud-error" role="alert">
-                <div>加载失败</div>
-                <code>{error}</code>
-              </div>
-            ) : info ? (
+            <label className="file-button">导入动作 JSON
+              <input type="file" accept="application/json,.json" onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void apiRef.current?.importFile(f);
+                e.target.value = '';
+              }} />
+            </label>
+            <dl className="hud-clipinfo">
+              <dt>mask</dt><dd>{selected ? selected.mask.join(', ') || '(空)' : '—'}</dd>
+              <dt>缺失骨骼</dt><dd>{info?.capabilities.missingProjectBones.length ? info.capabilities.missingProjectBones.join(', ') : '无'}</dd>
+              <dt>播放状态</dt><dd>{snapshot?.state ?? 'idle'}{snapshot && snapshot.weight < 1 ? ` w=${snapshot.weight.toFixed(2)}` : ''}{snapshot?.outgoing ? ` ← ${snapshot.outgoing}` : ''}</dd>
+            </dl>
+            <p className="hud-hint">旋转：左键或单指拖动 · Shift + 右键<br />平移：右键、双指或 Shift + 左键<br />缩放：滚轮或双指
+              {shiftPan && <em className="hud-mode">按住 Shift：左键平移，右键旋转</em>}
+            </p>
+          </div>
+          <div className="asset-details"><h3>资产信息</h3>
+            {info ? (
               <dl>
                 <dt>asset</dt>
                 <dd>{info.capabilities.assetName ?? '(未命名)'}</dd>
@@ -601,143 +641,11 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
                   {info.capabilities.creditNotation ?? '?'} · {info.capabilities.authors.join(', ') || '?'}
                 </dd>
               </dl>
-            ) : (
-              <div className="hud-loading">加载中… {avatarUrl}</div>
-            )}
-
-            <hr className="hud-sep" />
-            <strong>G1 · 动作</strong>
-
-            <div className="hud-row">
-              <select
-                className="hud-select"
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
-                aria-label="动作选择"
-              >
-                <option value="">（未选择）</option>
-                {catalog.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                    {c.source === 'imported' ? ' [导入]' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="hud-row">
-              <button type="button" className="hud-toggle" onClick={() => apiRef.current?.play(selectedId)} disabled={!selectedId}>
-                ▶ 播放
-              </button>
-              <button type="button" className="hud-toggle" onClick={() => apiRef.current?.pause()}>
-                ⏸ 暂停
-              </button>
-              <button type="button" className="hud-toggle" onClick={() => apiRef.current?.resume()}>
-                ⏵ 继续
-              </button>
-              <button type="button" className="hud-toggle" onClick={() => apiRef.current?.stop()}>
-                ⏹ 停止
-              </button>
-            </div>
-
-            <div className="hud-row">
-              <label className="hud-check">
-                <input
-                  type="checkbox"
-                  checked={loop}
-                  onChange={(e) => apiRef.current?.setLoop(e.target.checked)}
-                />
-                循环
-              </label>
-              <label className="hud-check">
-                <input
-                  type="checkbox"
-                  checked={showSkeleton}
-                  onChange={(e) => apiRef.current?.toggleSkeleton(e.target.checked)}
-                />
-                骨架
-              </label>
-            </div>
-
-            <input
-              className="hud-range"
-              type="range"
-              min={0}
-              max={Math.max(snapshot?.duration ?? 0, 0.001)}
-              step={0.01}
-              value={snapshot?.time ?? 0}
-              onChange={(e) => apiRef.current?.seek(Number(e.target.value))}
-              aria-label="时间轴"
-            />
-            <div className="hud-time">
-              {(snapshot?.time ?? 0).toFixed(2)}s / {(snapshot?.duration ?? 0).toFixed(2)}s
-              <span className="hud-state">
-                {snapshot?.state ?? 'idle'}
-                {snapshot && snapshot.weight < 1 ? ` w=${snapshot.weight.toFixed(2)}` : ''}
-                {snapshot?.outgoing ? ` ← ${snapshot.outgoing}` : ''}
-              </span>
-            </div>
-
-            <div className="hud-row">
-              <button type="button" className="hud-toggle" onClick={() => apiRef.current?.applyBase()}>
-                恢复基础站姿
-              </button>
-              <button type="button" className="hud-toggle" onClick={() => apiRef.current?.applyRest()}>
-                参考姿态
-              </button>
-            </div>
-
-            <div className="hud-row">
-              <label className="hud-file">
-                导入 JSON
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void apiRef.current?.importFile(f);
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-            </div>
-
-            <dl className="hud-clipinfo">
-              <dt>mask</dt>
-              <dd>{selected ? selected.mask.join(', ') || '(空)' : '—'}</dd>
-              <dt>缺失骨骼</dt>
-              <dd>
-                {info?.capabilities.missingProjectBones.length
-                  ? info.capabilities.missingProjectBones.join(', ')
-                  : '无'}
-              </dd>
-            </dl>
-
-            {clipError && (
-              <div className="hud-error" role="alert">
-                <div>动作错误（已保留原动作/姿态）</div>
-                <code>{clipError}</code>
-              </div>
-            )}
-
-            <button type="button" className="hud-toggle" onClick={() => resetViewRef.current?.()}>
-              归位视角
-            </button>
-
-            <p className="hud-hint">
-              旋转：左键拖动（或单指）· <strong>Shift + 右键</strong>（反转）
-              <br />
-              平移：<strong>Shift + 左键拖动</strong> · 或右键拖动 · 或双指
-              <br />
-              缩放：滚轮 · 或双指
-              {shiftPan && (
-                <em className="hud-mode">按住 Shift：左键 = 平移 ／ 右键 = 旋转（OrbitControls 内置反转）</em>
-              )}
-            </p>
-          </>
-        )}
-      </div>
-    </div>
+            ) : <p className="hint">{error ? '资产加载失败' : '正在读取资产信息…'}</p>}
+          </div>
+        </div>
+      </details>
+    </section>
   );
 }
 

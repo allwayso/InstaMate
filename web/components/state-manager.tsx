@@ -6,6 +6,7 @@ import { getActiveState, onStateChange, stopState, triggerState, type ActiveStat
 import type { StateEntry } from '@/lib/states-store';
 
 const EMOTIONS = ['neutral', 'happy', 'excited', 'shy', 'angry', 'sad', 'surprised'];
+const EMOTION_LABEL: Record<string, string> = { neutral: '平静', happy: '开心', excited: '兴奋', shy: '害羞', angry: '生气', sad: '难过', surprised: '惊讶' };
 
 export default function StateManager() {
   const [states, setStates] = useState<StateEntry[]>([]);
@@ -100,7 +101,7 @@ export default function StateManager() {
                 <div className="states-item-copy">
                   <strong>{state.name}</strong>
                   <span>
-                    {state.emotion} · {state.clip_id ? `动作：${state.clip_id}` : '未绑定动作'}
+                    {EMOTION_LABEL[state.emotion] ?? state.emotion} · {state.clip_id ? `动作：${state.clip_id}` : '未绑定动作'}
                     {state.loop ? ' · 循环' : ''}
                     {state.trigger_words.length ? ` · ${state.trigger_words.join('、')}` : ''}
                   </span>
@@ -123,7 +124,7 @@ export default function StateManager() {
           <label>触发词<input value={words} onChange={(event) => setWords(event.target.value)} placeholder="你好, hi, 挥手" /></label>
           <div className="states-form-row">
             <label>情绪<select value={emotion} onChange={(event) => setEmotion(event.target.value)}>
-              {EMOTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              {EMOTIONS.map((option) => <option key={option} value={option}>{EMOTION_LABEL[option]}</option>)}
             </select></label>
             <label>时长（秒）<input type="number" min="0" max="600" step="0.5" value={duration} onChange={(event) => setDuration(event.target.value)} placeholder="自动" /></label>
           </div>

@@ -1,11 +1,27 @@
+# ============================================================================
+# 判断标准只有一条：**这东西是团队共享的产品资产，还是只能在本机存在的东西？**
+#
+#   产品资产  → 入库：源码、文档、动作 clip（web/public/clips/*.json）、
+#                     UI 用的图（web/public/ 下）、.env.example
+#   本机产物  → 忽略：凭据、依赖、缓存、构建产物、大体积模型、运行时数据、输入素材
+#
+# 分目录的规则放在各自的 .gitignore 里（web/、memory/、tripo/），
+# 这里只放跨目录通用的。
+# ============================================================================
+
+# ── 操作系统 / 编辑器 ────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 *.swp
 *.swo
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
 
-# 本机凭据；示例配置应随源码提交
+# ── 凭据：★ 绝不能入库 ──────────────────────────────────────────────────────
+# 通配 `*` 是为了顺手盖住 .env.local / .env.production 这类变体；
+# 示例配置要跟着源码走，否则新同事不知道该填什么，所以用 ! 放行。
 .env*
 !.env.example
 !.env.*.example
@@ -13,60 +29,78 @@ Thumbs.db
 *.p12
 *.pfx
 
-# 各语言的本地依赖、缓存和日志
+# ── 语言级依赖、缓存、日志 ──────────────────────────────────────────────────
+node_modules/
+.next/
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 *.log
 *.tsbuildinfo
 
+# ── 输入照片：喂给 Tripo 管线的原图，不是产品资产 ───────────────────────────
+# 产品用的图都在 web/public/ 下；出现在仓库根目录 / tripo/ 下的图片，
+# 一律视为"随手丢进来的输入素材"——它们会被管线重画成 T-pose 参考图，
+# 本身就是可替换的中间物，而且往往是不该公开的真人照片。
+#
+# 只写 `/*.jpg` 而不是 `*.jpg`：后者会连 web/public/ 里的图一起忽略掉。
+/*.jpg
+/*.jpeg
+/*.png
+/*.webp
+/tripo/*.jpg
+/tripo/*.jpeg
+/tripo/*.png
+/tripo/*.webp
+
+# ── 大体积模型资产：有许可约束 或 可重新生成 ────────────────────────────────
+# VRM 有 creditNotation 之类的许可要求，而且单个 10–16 MB，不适合进仓库；
+# 用 tools/fetch-assets.mjs 拉或本地转换。FBX/GLB 同理，且许可常不明。
+*.vrm
+*.fbx
+*.glb
+*.usdz
+
+# 可供所有用户在角色选择器中使用的产品 VRM，通过 Git LFS 分发。
+# ★ 但只放行**产品角色**。生成的角色用 32 位 hex 命名，仍然忽略 ——
+#   否则每跑一次「照片生成角色」就会在 git status 里多一个未跟踪的 15 MB VRM，
+#   而它们只是本机产物（`data/avatar-jobs/` 里已经有一份可重新生成的）。
+!web/public/avatars/companion-*.vrm
+!web/public/avatars/sample.vrm
+!web/public/avatars/compat.vrm
+web/public/avatars/[0-9a-f][0-9a-f]*.vrm
+
+# MediaPipe 的 wasm/模型（约 38 MB）：由 npm 包派生，用
+#   node tools/sync-mediapipe.mjs
+# 生成，所以不进仓库。
+web/public/vendor/
+
+# 队友给的 Tripo 导出包，本地分析用
+tripo_asset_*/
+
+# ── 运行时数据：只属于本机，或可重新生成 ────────────────────────────────────
+# data/ 目前 0 个已跟踪文件，所以整目录忽略 —— 逐个列子目录的写法漏一个
+# 就会在 git status 里冒出来（avatar-jobs / states 就是这么加进来的）。
+#   data/mocap/       录制原始关键点，单段 5–10 MB
+#   data/states/      状态库（触发词、绑定关系）
+#   data/avatar-jobs/ 照片建角色的任务记录与原图
+# 注意：动作本体 web/public/clips/<id>.json（约 100 KB）**是**共享资产，入库。
+data/
+
+# G0 本地证据（截图等）
+.g0/
+
+# 联网调研的原始结果，与实现无关
+.firecrawl/
+
+# 文档构建中间物（源码 .md 入库，产物不入库）
 .pdfbuild/raw.md
 .pdfbuild/raw.html
 .pdfbuild/proposal.html
 .pdfbuild/*.pdf
 .pdfbuild/*.png
-.obsidian/workspace.json
-.obsidian/workspace-mobile.json
 .pdfbuild/t*.html
-
-# VRM 资产：体积大 + 有许可约束，用 tools/fetch-assets.sh 拉取，不进仓库
-*.vrm
-
-# 第三方模型资产（FBX/GLB）：体积大 + 许可不明，不进仓库
-*.fbx
-*.glb
-*.usdz
-
-# Tripo 导出包（队友给的生成资产，本地分析用）
-tripo_asset_*/
-
-# MediaPipe 的 wasm/模型（约 38 MB）：由 npm 包派生，用 node tools/sync-mediapipe.mjs 生成
-web/public/vendor/
-
-# G2 录制的原始关键点：单段可能 5–10 MB，体积不适合入库。
-# 动作本体（web/public/clips/<id>.json，约 100 KB）仍然入库，它是团队共享资产。
-# 代价：新克隆后动作库页面的「下载原始关键点」不可用，页面上会标注「仅本机」。
-data/mocap/
-data/states/
-data/avatar-jobs/
-
-# 联网调研的原始结果，与实现无关
-.firecrawl/
-
-# 依赖与构建产物（web/.gitignore 已覆盖 web/ 内，这里是根目录安全网）
-node_modules/
-.next/
-
-# G0 本地证据（截图等），不入库
-.g0/
-
-# Tripo 管线产物（模型/贴图/中间图，体积大且可重新生成）
-tripo/output/
-tripo/.upload_probe.json
-
-# Tripo API 凭据与 Python 缓存（★ 密钥绝不能入库）
-tripo/.env
-tripo/__pycache__/

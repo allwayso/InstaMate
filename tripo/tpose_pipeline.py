@@ -517,7 +517,9 @@ def main():
     global RIG_FORMAT  # 必须在任何使用 RIG_FORMAT 的语句之前
 
     ap = argparse.ArgumentParser(description="Tripo T-pose 资产管线")
-    ap.add_argument("--image", default=DEFAULT_IMAGE, help="原始照片路径（做参考图用）")
+    ap.add_argument("--image", default=None,
+                    help="原始照片路径（做参考图用）。续跑时以 state.json 里记录的原图为准，"
+                         "显式传入且不一致会报错，避免静默换图。")
     ap.add_argument("--run", help="已有 run 目录（续跑）")
     ap.add_argument("--upto", choices=["ref", "model", "rig"], default="ref", help="跑到哪个阶段停")
     ap.add_argument("--skip-texture", action="store_true", help="跳过独立贴图任务")
@@ -538,6 +540,27 @@ def main():
 
     state = load_state(run_dir)
     state.setdefault("status", "running")
+
+    # ★ 原图以 state 里记录的为准，**不乱用 --image 的默认值**。
+    #   踩过的坑：`--upto rig` 续跑时没传 --image，args.image 静默落回
+    #   `DEFAULT_IMAGE = trail.jpg`，于是整个管线（参考图→建模→贴图→绑骨→转 VRM）
+    #   全程照着**另一张照片**跑。每一步都"成功"，产物看起来也正常，
+    #   只有把人物对照一下才发现换人了 —— 这种静默替换比直接报错危险得多。
+    recorded_image = state.get("source_image")
+    explicit_image = Path(args.image).resolve() if args.image else None
+    if recorded_image:
+        image_path = Path(recorded_image).resolve()
+        if explicit_image and explicit_image != image_path:
+            raise SystemExit(
+                f"\n  ✗ 这个 run 用的原图是：\n      {image_path}\n"
+                f"    与 --image 指定的：\n      {explicit_image}\n"
+                f"    不一致。换原图请开一个新的 run（不带 --run），"
+                f"不要续跑旧 run —— 否则产物会混着两张照片的血统。\n"
+            )
+    else:
+        image_path = explicit_image or Path(DEFAULT_IMAGE).resolve()
+        if explicit_image is None:
+            print(f"\n  ⚠️ 未指定 --image，回退到默认图：{image_path}")
     state.setdefault("created_at", datetime.now().astimezone().isoformat())
     state.setdefault("run_dir", str(run_dir))
     state.setdefault("settings", {
@@ -566,8 +589,13 @@ def main():
         raise SystemExit("余额为 0，无法创建计费任务。")
 
     try:
-        if args.upto == "ref" and "tpose_ref_image" not in state:
-            state = stage_ref(run_dir, state, Path(args.image))
+        # ★ 少了前置阶段就先补跑前置阶段，而不是直接跳到目标阶段。
+        #   `--upto X` 的语义是"跑到 X 为止"，不是"只跑 X"。
+        #   原先这里写的是 `args.upto == "ref" and ...`，于是 `--upto rig`
+        #   在全新 run 上会直接调 stage_model，而那时 state 里还没有参考图，
+        #   必然抛 "缺少 T-pose 参考图"。只有分三段手动跑才碰不到（上一轮就是这么绕过去的）。
+        if "tpose_ref_image" not in state:
+            state = stage_ref(run_dir, state, image_path)
         if args.upto in {"model", "rig"} and "model_task_id" not in state:
             state = stage_model(run_dir, state, args.skip_texture)
         # ★ 不能只判 "rig_task_id 是否存在"：换了 out_format 时必须重绑，

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import ChatPanel from '@/components/chat-panel';
 import StateManager from '@/components/state-manager';
+import PageHeading from '@/components/page-heading';
 
 const DisplayCase = dynamic(() => import('@/components/display-case'), {
   ssr: false,
@@ -19,15 +20,15 @@ export default function StatesPage() {
     setHomeHref(avatar ? '/?avatar=' + encodeURIComponent(avatar) : '/');
   }, [avatar]);
   return (
-    <main>
-      <header className="page-head">
-        <h1>InstaMate · 状态库</h1>
-        <p>管理动作状态，并用文字或语音测试角色表演。
-          <Link href={homeHref}>返回主页</Link></p>
-      </header>
-      <DisplayCase src={avatar} />
+    <main id="main-content" className="states-page">
+      <PageHeading eyebrow="让回应更生动" title="角色状态库" description="将话语、情绪与动作关联，在对话中感受角色的回应。">
+        <Link className="button-link" href={homeHref}>返回影伴空间 <span aria-hidden="true">↗</span></Link>
+      </PageHeading>
+      <div className="companion-workspace">
+        <DisplayCase src={avatar} />
+        <ChatPanel />
+      </div>
       <StateManager />
-      <ChatPanel />
     </main>
   );
 }
