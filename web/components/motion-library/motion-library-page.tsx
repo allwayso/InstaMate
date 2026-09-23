@@ -101,6 +101,8 @@ const DEFAULT_SPLIT = 38;
 const SPLIT_STORAGE_KEY = 'mocap-split';
 const SPLIT_MIN = 20;
 const SPLIT_MAX = 70;
+/** 「动作同步诊断」面板开关：暂时隐藏，调轴向映射时改回 true */
+const SHOW_DIAGNOSTIC_PANEL = false;
 
 export default function MotionLibraryPage() {
   // ── 状态机 ───────────────────────────────────────────────────────────
@@ -1029,6 +1031,8 @@ export default function MotionLibraryPage() {
         <section className="panel control-panel">
           <div className="section-heading"><h2>录制动作</h2><span className="section-note">保持全身入镜，动作自然连贯</span></div>
 
+          {/* 动作同步诊断面板暂时隐藏（调轴向映射时再打开：把 SHOW_DIAGNOSTIC_PANEL 改为 true） */}
+          {SHOW_DIAGNOSTIC_PANEL && (
           <div className="diagnostic-box">
             <div>
               <strong>动作同步诊断</strong>
@@ -1063,6 +1067,7 @@ export default function MotionLibraryPage() {
               </p>
             )}
           </div>
+          )}
 
           <div className="record-box">
             <button
