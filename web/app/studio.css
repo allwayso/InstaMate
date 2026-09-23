@@ -116,7 +116,6 @@ main:focus { outline: none; }
 .chat-message.user { background: var(--msg-user-bg); border-radius: 12px 12px 3px 12px; }
 .chat-message span { font-size: 10px; }
 .chat-message small { font-size: 10px; }
-.chat-message .chat-replay { margin-top: 8px; min-height: 28px; padding: 3px 7px; background: transparent; border-color: var(--inset-border); color: var(--accent); font-size: 10px; }
 .chat-error { margin: 8px 18px; padding: 10px 12px; border-radius: 8px; background: var(--error-bg); color: var(--error-fg); font-size: 12px; overflow-wrap: anywhere; }
 .chat-form { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: end; padding: 16px 20px; background: var(--form-bg); border-color: var(--border); }
 .composer-status, .composer-hint { grid-column: 1 / -1; font-size: 10px; color: var(--muted-2); }
@@ -149,6 +148,16 @@ main:focus { outline: none; }
 .avatar-creator, .profile-panel { max-width: none; margin: 0; padding: 30px; }
 .avatar-creator h2, .profile-panel h2 { margin: 0 0 8px; font-size: 20px; font-weight: 550; }
 .avatar-creator > p, .profile-panel > p { max-width: 70ch; margin-top: 0; font-size: 13px; color: var(--muted); }
+.avatar-workflow-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 30px; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+.avatar-workflow-nav button { display: flex; align-items: center; gap: 14px; min-width: 0; min-height: 76px; padding: 14px 18px; border-radius: 12px; border-color: var(--border); background: var(--inset-bg); text-align: left; }
+.avatar-workflow-nav button:hover:not(:disabled) { border-color: var(--ok-border); }
+.avatar-workflow-nav button[aria-selected='true'] { border-color: var(--ok-border); background: var(--ok-bg); box-shadow: inset 0 0 0 1px var(--ok-border); }
+.avatar-workflow-nav button > span:last-child { display: grid; min-width: 0; gap: 2px; }
+.avatar-workflow-nav strong { font-size: 15px; font-weight: 620; }
+.avatar-workflow-nav small { color: var(--muted); font-size: 11px; }
+.avatar-workflow-number { color: var(--muted-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.avatar-workflow-nav button[aria-selected='true'] .avatar-workflow-number { color: var(--accent); }
+.avatar-pane-intro { max-width: 72ch; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .tripo-settings { margin: 22px 0; border: 1px solid var(--ok-border); background: var(--ok-bg); border-radius: 12px; overflow: hidden; }
 .tripo-settings-toggle { display: flex; align-items: center; width: 100%; gap: 16px; padding: 16px 19px; border: 0; border-radius: 0; background: transparent; text-align: left; }
 .tripo-settings-toggle:hover:not(:disabled) { background: var(--inset-hover); border: 0; }
@@ -178,6 +187,38 @@ main:focus { outline: none; }
 .avatar-jobs article > div { align-items: flex-start; }
 .avatar-jobs article span { font-size: 11px; }
 .avatar-jobs article a { display: inline-flex; margin-top: 10px; }
+.avatar-record-heading { margin-top: 34px; }
+.avatar-record-heading .quiet-button { white-space: nowrap; }
+.avatar-cleanup-confirm, .avatar-record-delete-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding: 13px 15px; border: 1px solid var(--warn-border); border-radius: 10px; background: var(--warn-bg); color: var(--warn-fg); font-size: 12px; }
+.avatar-cleanup-confirm { margin-bottom: 18px; }
+.avatar-cleanup-confirm p { flex: 1 1 280px; margin: 0; }
+.avatar-record-delete-confirm { margin-top: 14px; }
+.avatar-record-delete-confirm span { flex: 1 1 190px; }
+.avatar-notice { margin: 14px 0; color: var(--ok-fg); font-size: 12px; }
+.avatar-job-heading strong { font-size: 15px; font-weight: 600; }
+.avatar-job-heading > div { display: grid; gap: 2px; }
+.avatar-job-heading small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.avatar-job-heading span { text-align: right; overflow-wrap: anywhere; }
+.avatar-job-actions { display: flex; justify-content: flex-start !important; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.avatar-job-actions a { margin: 0 !important; }
+.avatar-job-actions .quiet-button { margin-left: auto; color: var(--danger-fg); }
+.avatar-job-error { margin: 12px 0; color: var(--danger-fg); font-size: 11px; }
+.avatar-job-error summary { cursor: pointer; }
+.avatar-job-error pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border-radius: 8px; background: var(--danger-bg); font: inherit; }
+.avatar-model-source { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr); gap: 24px; padding: 22px; border: 1px solid var(--inset-border); border-radius: 12px; background: var(--inset-bg); }
+.avatar-model-preview { display: grid; place-items: center; min-height: 300px; border: 1px solid var(--border); border-radius: 10px; background: var(--img-bg); }
+.avatar-model-preview img { display: block; width: 100%; max-height: 440px; object-fit: contain; border-radius: 9px; }
+.avatar-model-controls { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.avatar-model-controls label { display: grid; width: 100%; gap: 7px; color: var(--fg-2); font-size: 12px; }
+.avatar-model-controls label select { width: 100%; }
+.avatar-model-controls p { margin: 0; color: var(--muted); font-size: 12px; }
+.avatar-model-controls > .primary, .avatar-model-controls > .button-link { margin-top: 4px; }
+.avatar-model-history { display: grid; gap: 8px; }
+.avatar-model-history button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 12px 14px; text-align: left; background: var(--card-bg); }
+.avatar-model-history button.is-selected { border-color: var(--ok-border); background: var(--ok-bg); }
+.avatar-model-history strong { font-weight: 550; }
+.avatar-model-history span { color: var(--muted); font-size: 11px; text-align: right; }
+#avatar-model-panel .empty-state button { display: block; margin: 14px auto 0; }
 .empty-state { padding: 28px; text-align: center; border: 1px dashed var(--border-strong); border-radius: 12px; color: var(--muted); font-size: 13px; }
 .profile-steps { display: flex; gap: 10px; flex-wrap: wrap; margin: 24px 0; }
 .profile-steps span { color: var(--muted-2); font-size: 12px; display: inline-flex; gap: 10px; align-items: center; }
@@ -207,6 +248,8 @@ main:focus { outline: none; }
 .mocap-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
 .mocap-grid > * { min-width: 0; }
 .mocap-grid .control-panel { grid-column: 1 / -1; }
+/* 分栏拖把手：只在宽屏双栏布局下出现（见下方 min-width:1001px 媒体查询） */
+.split-handle { display: none; }
 .panel { padding: 22px; }
 .section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 20px; }
 .section-heading h2 { margin: 0; font-size: 17px; font-weight: 550; color: var(--fg); }
@@ -301,22 +344,35 @@ main:focus { outline: none; }
 code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywhere; }
 /* Keep recording controls and both views together in a desktop browser window. */
 @media (min-width: 1001px) {
-  .mocap-page { padding-top: 24px; }
+  .mocap-page { padding-top: 24px; display: flex; flex-direction: column; }
   .mocap-page .page-head { margin-bottom: 16px; }
   .workflow-steps { padding: 8px 0; margin-bottom: 18px; }
-  .mocap-grid { gap: 18px; }
+  /* 三栏：摄像头 | 拖把手 | 影伴预览。--split 由组件内联写入，默认 38%（右侧预览为主） */
+  .mocap-grid {
+    gap: 18px 14px;
+    grid-template-columns: minmax(300px, var(--split, 38%)) 16px minmax(0, 1fr);
+    /* 中间行高度跟着视口走：整页第一屏刚好撑满，又不被画布反馈撑爆 */
+    grid-template-rows: auto minmax(380px, calc(100dvh - 650px)) auto;
+    align-items: stretch; /* 覆盖 globals 的 align-items:start，让两个面板同高撑满整行 */
+  }
+  /* 分栏拖把手 */
+  .split-handle { display: flex; align-items: center; justify-content: center; cursor: col-resize; touch-action: none; border-radius: 8px; }
+  .split-handle::before { content: ''; width: 4px; height: 64px; border-radius: 2px; background: var(--border-strong); transition: background-color 160ms ease, width 160ms ease; }
+  .split-handle:hover::before, .split-handle:focus-visible::before, .split-handle.is-dragging::before { background: var(--accent); width: 6px; }
   .control-panel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 24px; padding: 10px 22px; }
   .control-panel .section-heading, .control-panel .record-box { margin: 0; }
   .control-panel .section-note { display: none; }
   .control-panel .capture-advanced { margin: 0; border: 0; }
   .control-panel .capture-advanced[open] { grid-column: 1 / -1; margin-top: 14px; border-top: 1px solid var(--border); }
   .control-panel .quality-box, .control-panel .build-box { grid-column: 1 / -1; }
-  .camera-panel, .preview-panel { padding: 18px; }
+  /* 两个面板撑满整行高度，画面区域吃掉面板内剩余空间 */
+  .camera-panel, .preview-panel { padding: 18px; display: flex; flex-direction: column; min-height: 0; }
   .camera-panel .section-heading, .preview-panel .section-heading { margin-bottom: 14px; }
+  .camera-capture { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .camera-controls, .preview-toolbar { min-height: 72px; margin-bottom: 12px; }
   .camera-diagnostics { margin-top: 10px; }
   .camera-diagnostics > summary { min-height: 34px; padding: 8px 0; }
-  .camera-stage, .mocap-preview-mount { width: min(100%, clamp(320px, calc((100dvh - 640px) * 1.333333), 560px)); margin-inline: auto; }
+  .camera-stage, .mocap-preview-mount { flex: 1; width: 100%; height: auto; min-height: 0; aspect-ratio: auto; margin: 0; }
 }
 @media (max-width: 1200px) {
   main, .mocap-page { padding-left: 26px; padding-right: 26px; }
@@ -375,6 +431,14 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .avatar-creator-form { grid-template-columns: 1fr; padding: 18px; }
   .avatar-creator-form .upload-field { grid-row: auto; min-height: 170px; padding: 18px; }
   .avatar-jobs { grid-template-columns: 1fr; }
+  .avatar-workflow-nav { gap: 8px; margin-bottom: 22px; padding-bottom: 18px; }
+  .avatar-workflow-nav button { min-height: 70px; padding: 10px; gap: 8px; }
+  .avatar-workflow-nav strong { font-size: 13px; }
+  .avatar-workflow-nav small { font-size: 10px; }
+  .avatar-model-source { grid-template-columns: 1fr; padding: 14px; gap: 16px; }
+  .avatar-model-preview { min-height: 220px; }
+  .avatar-record-heading { align-items: flex-start; flex-wrap: wrap; }
+  .avatar-job-heading span { text-align: left; }
   .profile-actions { padding: 16px; }
   .profile-actions button { margin-left: 0; }
   .profile-actions label { flex-wrap: wrap; }
