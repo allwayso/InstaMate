@@ -60,6 +60,7 @@ export interface MocapPreviewHandle {
   setMode(mode: PreviewMode): void;
   getSnapshot(): ClipSnapshot;
   getStatus(): PreviewStatus;
+  getCanvas(): HTMLCanvasElement | null;
 }
 
 interface Props {
@@ -95,7 +96,7 @@ const MocapVrmPreview = forwardRef<MocapPreviewHandle, Props>(function MocapVrmP
     if (!mount) return;
     let cancelled = false;
 
-    const scene = new VrmScene(mount, { background: 0x1b2326 });
+    const scene = new VrmScene(mount, { background: 0x1b2326, captureCanvas: true });
     sceneRef.current = scene;
     playerRef.current = player;
     const resizeObserver = new ResizeObserver(() => {
@@ -254,6 +255,9 @@ const MocapVrmPreview = forwardRef<MocapPreviewHandle, Props>(function MocapVrmP
         return player.getSnapshot();
       },
       getStatus,
+      getCanvas() {
+        return sceneRef.current?.renderer.domElement ?? null;
+      },
     }),
     [player, getStatus],
   );

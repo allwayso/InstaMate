@@ -35,6 +35,8 @@ export interface VrmSceneOptions {
   background?: number;
   /** 关闭轨道控制器（例如把场景嵌进固定视角的卡片里） */
   controls?: boolean;
+  /** 诊断录制要在另一个画布中复制当前帧。 */
+  captureCanvas?: boolean;
 }
 
 export class VrmScene {
@@ -56,7 +58,11 @@ export class VrmScene {
     const width = mount.clientWidth || 640;
     const height = mount.clientHeight || 480;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      preserveDrawingBuffer: opts.captureCanvas ?? false,
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(width, height, false);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;

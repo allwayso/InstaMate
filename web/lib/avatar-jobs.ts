@@ -1,6 +1,7 @@
-import { readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { join, relative, resolve, isAbsolute } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 export interface AvatarJob {
@@ -8,18 +9,14 @@ export interface AvatarJob {
   name: string;
   style: 'anime' | 'soft' | 'chibi';
   image_name: string;
-  /**
-   * `awaiting_continue` 是本流程的关键状态：阶段②（背景清洗，5 积分）已完成，
-   * 球在用户手上 —— 继续生成（建模 40 + 贴图 20 + 绑骨 25），还是换张图。
-   * 把判断放在这里，是因为**只有用户能看出来背景清洗得对不对**，
-   * 而后面那 85 积分一旦跑下去就收不回来了。
-   */
-  status: 'queued' | 'running' | 'awaiting_continue' | 'complete' | 'failed' | 'cancelled';
+  image_provider?: 'qwen' | 'wanx';
+  image_model?: string;
+  generation_mode?: 'aliyun' | 'tripo';
+  status: 'queued' | 'running' | 'image-ready' | 'awaiting_continue' | 'complete' | 'failed' | 'cancelled';
   stage: string;
   error?: string | null;
   avatar_url?: string;
   preview_url?: string;
-  /** 正在跑这个任务的 node 进程 pid。放弃时靠它把整棵树杀掉。 */
   pid?: number | null;
   created_at: string;
   updated_at: string;
@@ -32,98 +29,41 @@ export const AVATAR_JOBS_ROOT = process.env.AVATAR_JOBS_DIR
 export const avatarJobDir = (id: string) => join(AVATAR_JOBS_ROOT, id);
 export const validAvatarJobId = (id: string) => /^[0-9a-f]{32}$/.test(id);
 
-export async function readAvatarJob(id: string): Promise<AvatarJob | null> {
+export function avatarGenerationMode(job: AvatarJob): 'aliyun' | 'tripo' {
+  return job.generation_mode ?? (job.image_provider ? 'aliyun' : 'tripo');
+}
+
+export function isInsideDirectory(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+export async function readAvatarJob(id: string, jobsRoot: string = AVATAR_JOBS_ROOT): Promise<AvatarJob | null> {
   if (!validAvatarJobId(id)) return null;
   try {
-    const job = JSON.parse(await readFile(join(avatarJobDir(id), 'job.json'), 'utf8')) as AvatarJob;
-    try {
-      const state = JSON.parse(await readFile(join(avatarJobDir(id), 'state.json'), 'utf8')) as {
-        tpose_ref_image?: string;
-      };
-      if (state.tpose_ref_image) {
-        job.preview_url = '/api/avatar-jobs/' + id + '/reference';
-      }
-    } catch { /* 参考图尚未生成 */ }
+    const job = JSON.parse(await readFile(join(jobsRoot, id, 'job.json'), 'utf8')) as AvatarJob;
+    job.generation_mode = avatarGenerationMode(job);
+    if (await referencePath(id, jobsRoot)) job.preview_url = '/api/avatar-jobs/' + id + '/reference';
+    else delete job.preview_url;
     return job;
   } catch {
     return null;
   }
 }
 
-/**
- * 改 job.json 的若干字段（原子写）。
- *
- * 语气上这是 API 层的东西，但它和 readAvatarJob 必须共用同一个目录解析
- * —— 否则"读的是 data/avatar-jobs、写的是别处"这种错会静默生效。
- */
-export async function writeJobFields(id: string, fields: Partial<AvatarJob>): Promise<void> {
-  if (!validAvatarJobId(id)) throw new Error('任务 ID 不合法');
-  const path = join(avatarJobDir(id), 'job.json');
-  const current = JSON.parse(await readFile(path, 'utf8')) as AvatarJob;
-  const next = { ...current, ...fields, updated_at: new Date().toISOString() };
-  const temporary = path + '.tmp';
-  await writeFile(temporary, JSON.stringify(next, null, 2), 'utf8');
-  await rename(temporary, path);
-}
-
 export async function listAvatarJobs(): Promise<AvatarJob[]> {
   let names: string[];
   try { names = await readdir(AVATAR_JOBS_ROOT); }
   catch { return []; }
-  const jobs = await Promise.all(names.filter(validAvatarJobId).map(readAvatarJob));
+  const jobs = await Promise.all(names.filter(validAvatarJobId).map((id) => readAvatarJob(id)));
   return jobs.filter((job): job is AvatarJob => job !== null)
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-/**
- * 判断 child 是否真的在 parent 目录内。
- *
- * ★ 不能写成 `child.startsWith(parent + '/')` —— 那个写法在 **Windows 上恒为 false**：
- *   path 用反斜杠，所以 `'D:\\...\\abc\\0_tpose_ref\\x.png'.startsWith('D:\\...\\abc/')`
- *   永远是假的。后果不是“少一道检查”，而是**这道检查把正确的路径也拦了**：
- *   参考图永远 404、绑骨产物永远“路径不在任务目录”。
- *
- * 实测（win32）：
- *     目录内  旧写法 false ❌ / relative() true ✅
- *     目录外  旧写法 false    / relative() false ✅
- *
- * 也不能只把分隔符归一化就完事 —— `relative` 同时挡住了 ".." 逃逸与跨盘符。
- */
-export function isInsideDirectory(parent: string, child: string): boolean {
-  const rel = relative(parent, child);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
-}
-
-const execFileAsync = promisify(execFile);
-
-/**
- * 杀掉一个任务进程**连同它的子树**。
- *
- * 为什么不能只杀 pid：真正在烧 Tripo 积分的是它启动的 python 子进程，
- * 只把 node 收掉的话，python 会继续跑完整条管线（包括那 85 积分）。
- *
- * Windows 需要 `taskkill /T`；POSIX 下子进程是 detached 的（自成进程组），
- * 所以可以负号 pid 整组杀。
- */
-export async function killAvatarJobTree(pid: number): Promise<boolean> {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    if (process.platform === 'win32') {
-      await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F']);
-    } else {
-      process.kill(-pid, 'SIGTERM');
-    }
-    return true;
-  } catch {
-    // 进程已经自己退了（任务刚跑完）也算“已经不在跑”，不是错误
-    return false;
-  }
-}
-
-export async function referencePath(id: string): Promise<string | null> {
+export async function referencePath(id: string, jobsRoot: string = AVATAR_JOBS_ROOT): Promise<string | null> {
   if (!validAvatarJobId(id)) return null;
   try {
-    const dir = await realpath(avatarJobDir(id));
+    const dir = await realpath(join(jobsRoot, id));
     const state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as {
       tpose_ref_image?: string;
     };
@@ -135,23 +75,181 @@ export async function referencePath(id: string): Promise<string | null> {
   } catch { return null; }
 }
 
-/**
- * 起一个任务进程跑指定的阶段。spawn 成功后才返回 ——
- * 调用方要拿 child.pid 写进 job.json，不然「放弃」就杀不掉了。
- */
+export type DeleteAvatarJobResult = 'deleted' | 'not-found' | 'active' | 'busy';
+
+/** Only the id-derived job directory and VRM filenames may be removed. Roots are injectable for offline tests. */
+export async function deleteFinishedAvatarJob(
+  id: string,
+  roots: { jobsRoot?: string; avatarsRoot?: string } = {},
+): Promise<DeleteAvatarJobResult> {
+  if (!validAvatarJobId(id)) return 'not-found';
+  const jobsRoot = resolve(roots.jobsRoot ?? AVATAR_JOBS_ROOT);
+  const avatarsRoot = resolve(roots.avatarsRoot ?? join(process.cwd(), 'public', 'avatars'));
+  const dir = join(jobsRoot, id);
+
+  const rootInfo = await lstat(jobsRoot).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!rootInfo) return 'not-found';
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('任务根目录不安全');
+  const rootReal = await realpath(jobsRoot);
+  const dirInfo = await lstat(dir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!dirInfo) return 'not-found';
+  if (!dirInfo.isDirectory() || dirInfo.isSymbolicLink() || await realpath(dir) !== join(rootReal, id)) {
+    throw new Error('任务目录不安全');
+  }
+
+  const lockPath = join(dir, '.delete.lock');
+  let lock;
+  try {
+    lock = await open(lockPath, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return 'busy';
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'not-found';
+    throw error;
+  }
+  let movedTo: string | null = null;
+  try {
+    if (await realpath(dir) !== join(rootReal, id)) throw new Error('任务目录已变化');
+    const modelLock = await lstat(join(dir, '.model-start.lock')).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (modelLock) return 'busy';
+
+    const jobFile = join(dir, 'job.json');
+    const jobInfo = await lstat(jobFile).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (!jobInfo) return 'not-found';
+    if (!jobInfo.isFile() || jobInfo.isSymbolicLink() || await realpath(jobFile) !== join(rootReal, id, 'job.json')) {
+      throw new Error('任务记录文件不安全');
+    }
+    const job = JSON.parse(await readFile(jobFile, 'utf8')) as AvatarJob;
+    if (job.id !== id) throw new Error('任务记录 ID 不匹配');
+    if (job.status === 'queued' || job.status === 'running') return 'active';
+    if (!['image-ready', 'awaiting_continue', 'complete', 'failed', 'cancelled'].includes(job.status)) {
+      throw new Error('任务状态不合法');
+    }
+
+    // Do not trust avatar_url from job.json; generated files have fixed id-derived names.
+    const avatarRootInfo = await lstat(avatarsRoot).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (avatarRootInfo && (!avatarRootInfo.isDirectory() || avatarRootInfo.isSymbolicLink())) {
+      throw new Error('VRM 目录不安全');
+    }
+    const avatarFiles = [join(avatarsRoot, `${id}.vrm`), join(avatarsRoot, `${id}.tmp.vrm`)];
+    for (const path of avatarFiles) {
+      const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (info && (!info.isFile() || info.isSymbolicLink())) throw new Error('VRM 文件不安全');
+    }
+
+    // Rename first so the worker and readers cannot find this job while files are removed.
+    const tombstoneName = `.deleting-${id}-${randomUUID()}`;
+    const tombstone = join(jobsRoot, tombstoneName);
+    await rename(dir, tombstone);
+    movedTo = tombstone;
+    const tombstoneInfo = await lstat(tombstone);
+    if (!tombstoneInfo.isDirectory() || tombstoneInfo.isSymbolicLink() ||
+        await realpath(tombstone) !== join(rootReal, tombstoneName)) {
+      throw new Error('待删除目录不安全');
+    }
+    for (const path of avatarFiles) await unlink(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    await rm(tombstone, { recursive: true, force: false });
+    movedTo = null;
+    return 'deleted';
+  } catch (error) {
+    if (movedTo) await rename(movedTo, dir).catch(() => undefined);
+    throw error;
+  } finally {
+    await lock.close().catch(() => undefined);
+    await rm(lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
+export async function deleteAllFinishedAvatarJobs(
+  roots: { jobsRoot?: string; avatarsRoot?: string; generationMode?: 'aliyun' | 'tripo' } = {},
+): Promise<{ deletedIds: string[]; skippedIds: string[] }> {
+  const jobsRoot = resolve(roots.jobsRoot ?? AVATAR_JOBS_ROOT);
+  const rootInfo = await lstat(jobsRoot).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!rootInfo) return { deletedIds: [], skippedIds: [] };
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('任务根目录不安全');
+  const names = (await readdir(jobsRoot)).filter(validAvatarJobId);
+  const deletedIds: string[] = [];
+  const skippedIds: string[] = [];
+  for (const id of names) {
+    try {
+      if (roots.generationMode) {
+        const job = await readAvatarJob(id, jobsRoot);
+        if (!job || avatarGenerationMode(job) !== roots.generationMode) continue;
+      }
+      const result = await deleteFinishedAvatarJob(id, roots);
+      if (result === 'deleted') deletedIds.push(id);
+      else if (result !== 'not-found') skippedIds.push(id);
+    } catch {
+      skippedIds.push(id);
+    }
+  }
+  return { deletedIds, skippedIds };
+}
+
+export async function writeJobFields(id: string, fields: Partial<AvatarJob>): Promise<void> {
+  if (!validAvatarJobId(id)) throw new Error('任务 ID 不合法');
+  const path = join(avatarJobDir(id), 'job.json');
+  const current = JSON.parse(await readFile(path, 'utf8')) as AvatarJob;
+  const next = { ...current, ...fields, updated_at: new Date().toISOString() };
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(next, null, 2), 'utf8');
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+const execFileAsync = promisify(execFile);
+
+export async function killAvatarJobTree(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    if (process.platform === 'win32') {
+      await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F']);
+    } else {
+      process.kill(-pid, 'SIGTERM');
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function spawnAvatarJob(
-  // 不用 NodeJS.ProcessEnv：Next 给它加了必填的 NODE_ENV，
-  // 而我们这里只关心“要额外注入哪几个变量”，用不着完整的环境类型。
   id: string, stage: 'ref' | 'full', env: Record<string, string | undefined>,
 ): Promise<number | undefined> {
   if (!validAvatarJobId(id)) throw new Error('任务 ID 不合法');
-  if (!['ref', 'full'].includes(stage)) throw new Error('阶段不合法');
   const repo = resolve(process.cwd(), '..');
   const { spawn } = await import('node:child_process');
+  const workerEnv = { ...process.env, ...env };
+  delete workerEnv.DASHSCOPE_API_KEY;
+  delete workerEnv.DASHSCOPE_BASE_URL;
+  delete workerEnv.DASHSCOPE_WS_URL;
   const child = spawn(process.execPath, [join(repo, 'tools', 'avatar-job.mjs'), id, stage], {
-    cwd: repo, env: { ...process.env, ...env },
-    // detached：自成进程组，POSIX 下才能整组杀；配合 taskkill /T 覆盖 Windows。
-    detached: true, stdio: 'ignore',
+    cwd: repo, env: workerEnv, detached: true, stdio: 'ignore',
   });
   await new Promise<void>((done, failed) => {
     child.once('spawn', done);
@@ -161,18 +259,12 @@ export async function spawnAvatarJob(
   return child.pid;
 }
 
-/**
- * 把任务回到"只有原图"的状态：删掉 state.json 与上一版参考图。
- *
- * 换图时必须做这一步 —— 管线的续跑是以 state.json 为判据的，
- * 不清掉的话它会认为"背景清洗已经做过了"，直接拿旧图去建模。
- */
 export async function resetAvatarJobState(id: string): Promise<void> {
   if (!validAvatarJobId(id)) throw new Error('任务 ID 不合法');
   const dir = avatarJobDir(id);
   await rm(join(dir, 'state.json'), { force: true });
   for (const name of await readdir(dir).catch(() => [] as string[])) {
-    if (name.startsWith('0') || name.startsWith('1') || name.startsWith('2') || name.startsWith('3')) {
+    if (/^0[0-9]_/.test(name) || /^[123][0-9]_/.test(name)) {
       await rm(join(dir, name), { recursive: true, force: true });
     }
   }

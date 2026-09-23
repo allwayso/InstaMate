@@ -33,6 +33,8 @@ export interface CameraFramePayload {
 export interface CameraCaptureHandle {
   session: HolisticSession | null;
   video: HTMLVideoElement | null;
+  start(): Promise<void>;
+  getOverlayCanvas(): HTMLCanvasElement | null;
 }
 
 interface Props {
@@ -113,6 +115,10 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
 
   const onFrameRef = useRef(onFrame);
   onFrameRef.current = onFrame;
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
 
   // 覆盖层重画：用 rAF 节流到 ~30Hz，而不是每个推理帧都 setState
   useEffect(() => {
@@ -145,7 +151,10 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
   const stop = useCallback(() => {
     sessionRef.current?.stop();
     sessionRef.current = null;
-    if (handleRef) handleRef.current = { session: null, video: null };
+    if (handleRef?.current) {
+      handleRef.current.session = null;
+      handleRef.current.video = null;
+    }
     lastFrameRef.current = { pose: null, leftHand: null, rightHand: null, face: null };
     setFps(0);
     setInferenceMs(0);
@@ -183,11 +192,11 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         onStatus: (s, d) => {
           setStatus(s);
           setDetail(d);
-          onStatus?.(s, d);
+          onStatusRef.current?.(s, d);
         },
         onError: (e) => {
           setError(describeCameraError(e));
-          onError?.(e.message);
+          onErrorRef.current?.(e.message);
         },
         onFrame: (frame) => {
           // 关键数据到位情况：每帧更新一次，缺什么一眼可见
@@ -208,7 +217,10 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         },
       });
       sessionRef.current = session;
-      if (handleRef) handleRef.current = { session, video };
+      if (handleRef?.current) {
+        handleRef.current.session = session;
+        handleRef.current.video = video;
+      }
 
       try {
         await session.start();
@@ -226,8 +238,21 @@ export default function CameraCapture({ onFrame, onStatus, onError, locked, hand
         setStatus('error');
       }
     },
-    [handleRef, onError, onStatus],
+    [handleRef],
   );
+
+  useEffect(() => {
+    if (!handleRef) return;
+    handleRef.current = {
+      session: sessionRef.current,
+      video: videoRef.current,
+      start: () => start(deviceId),
+      getOverlayCanvas: () => boxRef.current?.querySelector<HTMLCanvasElement>('canvas.mocap-overlay') ?? null,
+    };
+    return () => {
+      handleRef.current = null;
+    };
+  }, [deviceId, handleRef, start]);
 
   useEffect(() => {
     // 初次挂载先探一下有没有摄像头（不申请权限，label 可能为空）

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { killAvatarJobTree, readAvatarJob, writeJobFields } from '@/lib/avatar-jobs';
+import {
+  deleteFinishedAvatarJob, killAvatarJobTree, readAvatarJob, validAvatarJobId, writeJobFields,
+} from '@/lib/avatar-jobs';
 import { localRequestOnly } from '@/lib/local-request';
 
 export const runtime = 'nodejs';
@@ -14,25 +16,26 @@ export async function GET(request: Request, context: RouteContext<'/api/avatar-j
     : NextResponse.json({ error: '任务不存在' }, { status: 404 });
 }
 
-/**
- * 放弃这个任务。
- *
- * 为什么需要它：阶段②之后用户可以选"继续生成"，但那是 85 积分。
- * 在花之前他得能说"算了" —— 而且说"算了"必须是**真的算了**：
- * 把整棵进程树杀掉。只标记状态不改进程的话，python 还在后台把管线跑完，
- * 积分照样扣，用户看到的是"我明明取消了，钱还是没了"。
- */
 export async function DELETE(request: Request, context: RouteContext<'/api/avatar-jobs/[id]'>) {
   const gate = localRequestOnly(request);
   if (gate) return gate;
   const { id } = await context.params;
-  const job = await readAvatarJob(id);
-  if (!job) return NextResponse.json({ error: '任务不存在' }, { status: 404 });
-  if (job.status === 'complete') {
-    return NextResponse.json(
-      { error: '任务已完成，放弃请直接删除生成的模型文件' }, { status: 409 });
+  if (!validAvatarJobId(id)) return NextResponse.json({ error: '任务不存在' }, { status: 404 });
+  try {
+    const job = await readAvatarJob(id);
+    if (!job) return NextResponse.json({ error: '任务不存在' }, { status: 404 });
+    if (job.generation_mode === 'tripo' &&
+        ['queued', 'running', 'awaiting_continue'].includes(job.status)) {
+      const killed = typeof job.pid === 'number' ? await killAvatarJobTree(job.pid) : false;
+      await writeJobFields(id, { status: 'cancelled', stage: '已放弃', pid: null });
+      return NextResponse.json({ ...(await readAvatarJob(id)), killed },
+        { headers: { 'cache-control': 'no-store' } });
+    }
+    const result = await deleteFinishedAvatarJob(id);
+    if (result === 'deleted') return NextResponse.json({ deletedId: id }, { headers: { 'cache-control': 'no-store' } });
+    if (result === 'not-found') return NextResponse.json({ error: '任务不存在' }, { status: 404 });
+    return NextResponse.json({ error: result === 'active' ? '任务正在生成，暂不能删除' : '任务正在启动或清理，请稍后再试' }, { status: 409 });
+  } catch {
+    return NextResponse.json({ error: '清理任务失败，请检查本地文件' }, { status: 500 });
   }
-  const killed = typeof job.pid === 'number' ? await killAvatarJobTree(job.pid) : false;
-  await writeJobFields(id, { status: 'cancelled', stage: '已放弃', pid: null });
-  return NextResponse.json({ ok: true, killed }, { headers: { 'cache-control': 'no-store' } });
 }

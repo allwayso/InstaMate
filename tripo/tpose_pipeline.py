@@ -1,36 +1,19 @@
 #!/usr/bin/env python
-"""
-Tripo T-pose 资产管线：参考图 -> T-pose 3D -> 自动绑骨
+"""T-pose 平面图与 3D 资产管线。
 
-为什么单独一个脚本（而不是塞进 tripo.py）：
-    官方 API 里 `t_pose` 属于 **generate_image** 接口，不属于 image_to_model。
-    要拿到"绑骨友好的 T-pose 模型"，正确顺序是：
-
-        ① upload         上传原始照片
-        ② generate_image t_pose=true / template=t_pose  -> 标准 T-pose 参考图
-        ③ image_to_model 从参考图重建 3D                 -> T-pose 的几何
-        ④ animate_rig    自动绑骨                        -> 带骨骼模型
-
-    分阶段执行是刻意的：②的产物（参考图）很便宜且**肉眼可判**，
-    先看再决定要不要继续花后面的积分。状态存在 state.json，可随时续跑。
-
-用法：
-    # 只做第 ①② 步（产出 T-pose 参考图，便宜、可肉眼检查）
-    python tpose_pipeline.py --image D:/Active-Desktop-Pet/trail.jpg --upto ref
-
-    # 看过参考图满意后，续跑 ③
-    python tpose_pipeline.py --run output/tpose_20260923_xxxxxx --upto model
-
-    # 再续跑 ④
-    python tpose_pipeline.py --run output/tpose_20260923_xxxxxx --upto rig
+--upto ref 可由 Tripo 从原始照片生成参考图；阿里百炼生成的动漫参考图
+也可直接存入 state.json 或用 --image 导入，再进入 model/rig 阶段。
 """
 
 from __future__ import annotations
 
 import argparse
+import filecmp
+import hashlib
 import json
 import os
 import re
+import shutil
 import time
 import zipfile
 from datetime import datetime
@@ -56,23 +39,23 @@ if not API_KEY:
     )
 
 BASE_URL = os.getenv("TRIPO_BASE_URL", "https://api.tripo3d.com/v2/openapi").rstrip("/")
+if (urlparse(BASE_URL).hostname or "").endswith(".aliyuncs.com"):
+    raise RuntimeError("Tripo 3D 地址不能填写阿里百炼地址；请分别配置两项服务。")
 HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 JSON_HEADERS = {**HEADERS, "Content-Type": "application/json"}
 
-# --- ② T-pose 参考图（generate_image）---
-# 模板清单里 t_pose 标注 "Best with: Nano Banana, ar 1:1"。
+# Tripo 平面图流程；阿里百炼生成的参考图可直接进入建模阶段。
 IMAGE_MODEL_VERSION = os.getenv("TRIPO_IMAGE_MODEL_VERSION", "gemini_2.5_flash_image_preview")
 IMAGE_TEMPLATE = os.getenv("TRIPO_IMAGE_TEMPLATE", "t_pose")
 IMAGE_PROMPT = os.getenv(
     "TRIPO_IMAGE_PROMPT",
-    "Full body photo of the same person standing in a strict T-pose: arms fully "
-    "horizontal and straight out to the sides, palms facing down, legs straight and "
-    "slightly apart, facing the camera directly. Keep the person's identity, face, "
-    "hairstyle and clothing identical to the reference image. Plain light grey "
-    "background, even lighting, whole body visible from head to toe, nothing cropped.",
+    "One front-facing full-body anime character in a strict T-pose, centered on a plain "
+    "light background. Keep the person's identity, hairstyle and clothing colors. "
+    "Show one person and one pose only, with head, hands and feet fully visible. "
+    "No turnaround sheet, side or back view, close-up, labels, color swatches or props.",
 )
 
-# --- ③ 几何（image_to_model）---
+# --- 几何（image_to_model）---
 MODEL_VERSION = os.getenv("TRIPO_MODEL_VERSION", "v3.1-20260211")
 GEOMETRY_QUALITY = os.getenv("TRIPO_GEOMETRY_QUALITY", "detailed")
 FACE_LIMIT = int(os.getenv("TRIPO_FACE_LIMIT", "100000"))
@@ -80,11 +63,11 @@ ENABLE_IMAGE_AUTOFIX = os.getenv("TRIPO_ENABLE_IMAGE_AUTOFIX", "true").lower() i
     "1", "true", "yes", "on",
 }
 
-# --- ③b 贴图（texture_model，独立高级贴图）---
+# --- 贴图（texture_model，独立高级贴图）---
 TEXTURE_MODEL_VERSION = os.getenv("TRIPO_TEXTURE_MODEL_VERSION", "v3.0-20250812")
 TEXTURE_QUALITY = os.getenv("TRIPO_TEXTURE_QUALITY", "detailed")
 
-# --- ④ 绑骨（animate_rig）---
+# --- 绑骨（animate_rig）---
 RIG_MODEL_VERSION = os.getenv("RIG_MODEL_VERSION", "v1.0-20240301")
 RIG_SPEC = os.getenv("TRIPO_RIG_SPEC", "mixamo")
 # ★ 官方 `out_format` 默认就是 glb，而且我们真正需要的就是它：
@@ -96,7 +79,6 @@ RIG_FORMAT = os.getenv("TRIPO_RIG_FORMAT", "glb").lower()
 POLL_INTERVAL = float(os.getenv("TRIPO_POLL_INTERVAL", "3"))
 TIMEOUT = int(os.getenv("TRIPO_TIMEOUT", "1800"))
 
-DEFAULT_IMAGE = r"D:/Active-Desktop-Pet/trail.jpg"
 DEFAULT_OUTPUT_ROOT = str(HERE / "output")
 
 
@@ -149,6 +131,10 @@ def post_task(payload: dict, label: str) -> str:
     return task_id
 
 
+class TerminalTaskFailure(RuntimeError):
+    """服务端明确结束且失败；超时或网络故障不属于此类。"""
+
+
 def wait(task_id: str, label: str) -> dict:
     print(f"\n>>> 等待：{label}  ({task_id})")
     started = time.time()
@@ -170,7 +156,7 @@ def wait(task_id: str, label: str) -> dict:
             return data
 
         if status in {"failed", "failure", "cancelled", "canceled", "banned", "expired"}:
-            raise RuntimeError(f"{label} 失败：\n" + json.dumps(data, indent=2, ensure_ascii=False))
+            raise TerminalTaskFailure(f"{label} 失败：\n" + json.dumps(data, indent=2, ensure_ascii=False))
 
         time.sleep(POLL_INTERVAL)
 
@@ -296,9 +282,84 @@ def load_state(run_dir: Path) -> dict:
 
 
 def save_state(run_dir: Path, state: dict):
-    (run_dir / "state.json").write_text(
-        json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    target = run_dir / "state.json"
+    temporary = run_dir / f".state.{os.getpid()}.{time.time_ns()}.tmp"
+    try:
+        temporary.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+STAGE_FIELDS = {
+    "model": ("model_task_id", "model_result", "geometry_files",
+              "texture_task_id", "texture_result", "textured_files",
+              "prerigcheck_task_id", "prerigcheck_result", "prerigcheck_base_task_id",
+              "rig_task_id", "rig_result", "rigged_files", "rig_type",
+              "rig_format", "rig_base_task_id"),
+    "texture": ("texture_task_id", "texture_result", "textured_files",
+                "prerigcheck_task_id", "prerigcheck_result", "prerigcheck_base_task_id",
+                "rig_task_id", "rig_result", "rigged_files", "rig_type",
+                "rig_format", "rig_base_task_id"),
+    "prerigcheck": ("prerigcheck_task_id", "prerigcheck_result", "prerigcheck_base_task_id",
+                    "rig_task_id", "rig_result", "rigged_files", "rig_type",
+                    "rig_format", "rig_base_task_id"),
+    "rig": ("rig_task_id", "rig_result", "rigged_files", "rig_type",
+            "rig_format", "rig_base_task_id"),
+}
+
+
+def clear_stage(run_dir: Path, state: dict, stage: str):
+    """仅终态失败时清理该任务及下游；下一次调用才会创建新任务。"""
+    for key in STAGE_FIELDS[stage]:
+        state.pop(key, None)
+    save_state(run_dir, state)
+
+
+def files_ready(paths, suffix: str | None = None) -> bool:
+    if not isinstance(paths, list) or not paths:
+        return False
+    files = [Path(path) for path in paths if isinstance(path, str)]
+    return len(files) == len(paths) and all(
+        path.is_file() and path.stat().st_size > 0 for path in files
+    ) and (suffix is None or any(path.suffix.lower() == suffix for path in files))
+
+
+def image_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resume_task(run_dir: Path, state: dict, stage: str, label: str,
+                payload_factory, created_fields: dict | None = None) -> dict:
+    """成功结果复用；已有任务继续等；只有无任务 ID 时才提交。"""
+    task_key = f"{stage}_task_id"
+    result_key = f"{stage}_result"
+    task_id = state.get(task_key)
+    result = state.get(result_key)
+    if task_id and isinstance(result, dict) and result.get("status") == "success":
+        return result
+
+    if not task_id:
+        task_id = post_task(payload_factory(), label)
+        state[task_key] = task_id
+        state.update(created_fields or {})
+        state.pop(result_key, None)
+        save_state(run_dir, state)
+    else:
+        print(f"\n>>> 续查已有任务：{label}  ({task_id})")
+
+    try:
+        result = wait(task_id, label)
+    except TerminalTaskFailure:
+        clear_stage(run_dir, state, stage)
+        raise
+    state[result_key] = result
+    save_state(run_dir, state)
+    return result
 
 
 # ============================================================
@@ -306,175 +367,181 @@ def save_state(run_dir: Path, state: dict):
 # ============================================================
 
 def stage_ref(run_dir: Path, state: dict, image: Path) -> dict:
-    """① 上传原图  ② generate_image(t_pose) -> T-pose 参考图"""
-    print("\n" + "=" * 64)
-    print("阶段 ① 上传原始照片")
-    print("=" * 64)
-
-    if not image.exists():
-        raise FileNotFoundError(f"找不到图片：{image}")
-    print(f"    {image}  {image.stat().st_size/1024:.0f} KB")
-    with open(image, "rb") as fh:
-        up = check(
-            requests.post(
-                f"{BASE_URL}/upload/sts",
-                headers=HEADERS,
-                files={"file": (image.name, fh, "application/octet-stream")},
-                timeout=180,
-            )
-        )
-    token = up["data"]["image_token"]
+    """Tripo generate_image：从原始照片得到待用户确认的 T-pose 平面图。"""
+    if not image.is_file():
+        raise FileNotFoundError(f"找不到原始照片：{image}")
+    recorded = state.get("source_image")
+    if recorded and Path(recorded).resolve() != image.resolve():
+        raise RuntimeError("原始照片与这个 run 已记录的照片不一致；请创建新的 run")
+    digest = image_digest(image)
+    if state.get("source_image_sha256") and state["source_image_sha256"] != digest:
+        raise RuntimeError("原始照片内容已改变；请创建新的 run")
     state["source_image"] = str(image.resolve())
-    state["source_image_token"] = token
-    print(f"    image_token: {token}")
-    save_state(run_dir, state)
+    state["source_image_sha256"] = digest
 
-    print("\n" + "=" * 64)
-    print(f"阶段 ② 生成 T-pose 参考图（generate_image / template={IMAGE_TEMPLATE}）")
-    print("=" * 64)
-    payload = {
-        "type": "generate_image",
-        "model_version": IMAGE_MODEL_VERSION,
-        "prompt": IMAGE_PROMPT,
-        "template": IMAGE_TEMPLATE,
-        "t_pose": True,
-        "file": {"type": image.suffix.lstrip(".").lower(), "file_token": token},
-    }
-    gen_id = post_task(payload, "generate_image (t_pose)")
-    state["generate_image_task_id"] = gen_id
-    save_state(run_dir, state)
+    if (files_ready(state.get("tpose_ref_files")) and state.get("tpose_ref_image")
+            and Path(state["tpose_ref_image"]).is_file()):
+        return state
 
-    result = wait(gen_id, "T-pose 参考图")
-    state["generate_image_result"] = result
-    save_state(run_dir, state)
+    token = state.get("source_image_token")
+    if not token:
+        with image.open("rb") as source:
+            uploaded = check(requests.post(
+                f"{BASE_URL}/upload/sts", headers=HEADERS,
+                files={"file": (image.name, source, "application/octet-stream")}, timeout=180,
+            ))
+        token = uploaded["data"]["image_token"]
+        state["source_image_token"] = token
+        save_state(run_dir, state)
+
+    task_id = state.get("generate_image_task_id")
+    if not task_id:
+        task_id = post_task({
+            "type": "generate_image", "model_version": IMAGE_MODEL_VERSION,
+            "prompt": IMAGE_PROMPT, "template": IMAGE_TEMPLATE, "t_pose": True,
+            "file": {"type": image.suffix.lstrip(".").lower(), "file_token": token},
+        }, "generate_image (t_pose)")
+        state["generate_image_task_id"] = task_id
+        save_state(run_dir, state)
+
+    result = state.get("generate_image_result")
+    if not isinstance(result, dict) or result.get("status") != "success":
+        try:
+            result = wait(task_id, "T-pose 参考图")
+        except TerminalTaskFailure:
+            state.pop("generate_image_task_id", None)
+            state.pop("generate_image_result", None)
+            save_state(run_dir, state)
+            raise
+        state["generate_image_result"] = result
+        save_state(run_dir, state)
 
     files = download(result.get("output", {}), run_dir / "00_tpose_ref", {"image": "tpose_ref"})
-    state["tpose_ref_files"] = [str(p) for p in files]
+    images = [path for path in files if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}]
+    if not images:
+        raise RuntimeError("Tripo 平面图任务已完成，但没有返回可用的参考图")
+    state["tpose_ref_files"] = [str(path) for path in files]
+    state["tpose_ref_image"] = str(images[0])
     save_state(run_dir, state)
-
-    imgs = [p for p in files if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}]
-    if imgs:
-        state["tpose_ref_image"] = str(imgs[0])
-        save_state(run_dir, state)
-        print(f"\n    ➜ T-pose 参考图：{imgs[0]}")
     return state
-
 
 def stage_model(run_dir: Path, state: dict, skip_texture: bool) -> dict:
     """③ image_to_model（从 T-pose 参考图） + ③b texture_model"""
     ref = state.get("tpose_ref_image")
     if not ref or not Path(ref).exists():
         raise RuntimeError(
-            "缺少 T-pose 参考图。先跑 --upto ref，或确认 state.json 里的 tpose_ref_image。"
+            "缺少动漫 T-pose 参考图。先由阿里百炼生成，或使用 --image 导入。"
         )
     ref_path = Path(ref)
     print("\n" + "=" * 64)
     print(f"阶段 ③ 从 T-pose 参考图重建 3D：{ref_path.name}")
     print("=" * 64)
 
-    with open(ref_path, "rb") as fh:
-        up = check(
-            requests.post(
-                f"{BASE_URL}/upload/sts",
-                headers=HEADERS,
-                files={"file": (ref_path.name, fh, "application/octet-stream")},
-                timeout=180,
-            )
-        )
-    ref_token = up["data"]["image_token"]
-    state["tpose_ref_token"] = ref_token
+    def upload_ref() -> str:
+        # 仅在确需新建任务时上传；已有 task_id 可以直接续查。
+        with open(ref_path, "rb") as fh:
+            up = check(requests.post(
+                f"{BASE_URL}/upload/sts", headers=HEADERS,
+                files={"file": (ref_path.name, fh, "application/octet-stream")}, timeout=180,
+            ))
+        token = up["data"]["image_token"]
+        state["tpose_ref_token"] = token
+        save_state(run_dir, state)
+        return token
 
-    payload = {
-        "type": "image_to_model",
-        "model_version": MODEL_VERSION,
-        "face_limit": FACE_LIMIT,
-        "file": {"type": ref_path.suffix.lstrip(".").lower(), "file_token": ref_token},
-        # 几何优先：贴图由独立的 texture_model 任务做（质量更高）。
-        "texture": False,
-        "pbr": False,
-        "enable_image_autofix": ENABLE_IMAGE_AUTOFIX,
-    }
-    if MODEL_VERSION in {"v3.0-20250812", "v3.1-20260211"}:
-        payload["geometry_quality"] = GEOMETRY_QUALITY
+    def model_payload() -> dict:
+        token = upload_ref()
+        payload = {
+            "type": "image_to_model",
+            "model_version": MODEL_VERSION,
+            "face_limit": FACE_LIMIT,
+            "file": {"type": ref_path.suffix.lstrip(".").lower(), "file_token": token},
+            "texture": False,
+            "pbr": False,
+            "enable_image_autofix": ENABLE_IMAGE_AUTOFIX,
+        }
+        if MODEL_VERSION in {"v3.0-20250812", "v3.1-20260211"}:
+            payload["geometry_quality"] = GEOMETRY_QUALITY
+        return payload
 
-    model_id = post_task(payload, "image_to_model (T-pose)")
-    state["model_task_id"] = model_id
-    save_state(run_dir, state)
-
-    result = wait(model_id, "T-pose 几何")
-    state["model_result"] = result
-    save_state(run_dir, state)
-    files = download(result.get("output", {}), run_dir / "01_geometry")
-    state["geometry_files"] = [str(p) for p in files]
-    save_state(run_dir, state)
+    model_result = resume_task(
+        run_dir, state, "model", "T-pose 几何", model_payload,
+    )
+    if not files_ready(state.get("geometry_files")):
+        files = download(model_result.get("output", {}), run_dir / "01_geometry")
+        state["geometry_files"] = [str(p) for p in files]
+        save_state(run_dir, state)
+        if not files_ready(state["geometry_files"]):
+            raise RuntimeError("Tripo 几何任务已完成，但未得到可用的模型文件")
 
     if skip_texture:
         print("\n    （--skip-texture：跳过贴图，绑骨直接用几何任务）")
-        state["texture_task_id"] = None
-        save_state(run_dir, state)
         return state
 
     print("\n" + "=" * 64)
     print(f"阶段 ③b 生成高级 PBR 贴图（{TEXTURE_MODEL_VERSION} / {TEXTURE_QUALITY}）")
     print("=" * 64)
-    tex_id = post_task(
-        {
+    def texture_payload() -> dict:
+        token = upload_ref()
+        return {
             "type": "texture_model",
-            "original_model_task_id": model_id,
+            "original_model_task_id": state["model_task_id"],
             "model_version": TEXTURE_MODEL_VERSION,
             "texture_prompt": {
-                "image": {"type": ref_path.suffix.lstrip(".").lower(), "file_token": ref_token}
+                "image": {"type": ref_path.suffix.lstrip(".").lower(), "file_token": token}
             },
             "texture": True,
             "pbr": True,
             "texture_quality": TEXTURE_QUALITY,
             "texture_alignment": "original_image",
             "bake": True,
-        },
-        "texture_model",
-    )
-    state["texture_task_id"] = tex_id
-    save_state(run_dir, state)
+        }
 
-    result = wait(tex_id, "PBR 贴图")
-    state["texture_result"] = result
-    save_state(run_dir, state)
-    files = download(result.get("output", {}), run_dir / "02_textured")
-    state["textured_files"] = [str(p) for p in files]
-    save_state(run_dir, state)
+    texture_result = resume_task(
+        run_dir, state, "texture", "PBR 贴图", texture_payload,
+    )
+    if not files_ready(state.get("textured_files")):
+        files = download(texture_result.get("output", {}), run_dir / "02_textured")
+        state["textured_files"] = [str(p) for p in files]
+        save_state(run_dir, state)
+        if not files_ready(state["textured_files"]):
+            raise RuntimeError("Tripo 贴图任务已完成，但未得到可用的贴图模型文件")
     return state
 
 
-def stage_rig(run_dir: Path, state: dict) -> dict:
+def stage_rig(run_dir: Path, state: dict, skip_texture: bool) -> dict:
     """④ animate_prerigcheck -> animate_rig"""
-    base = state.get("texture_task_id") or state.get("model_task_id")
+    base = state.get("model_task_id") if skip_texture else state.get("texture_task_id")
     if not base:
         raise RuntimeError("缺少上游任务 id。先跑 --upto model。")
 
-    # 换了 out_format 就必须重绑（旧产物是另一种格式，不能复用）
-    if state.get("rig_task_id") and state.get("rig_format") != RIG_FORMAT:
-        print(f"\n  ⚠️ out_format 由 {state.get('rig_format')} 变为 {RIG_FORMAT}，重新绑定")
-        for k in ("rig_task_id", "rig_result", "rigged_files", "rig_type"):
-            state.pop(k, None)
-        save_state(run_dir, state)
+    # 上游任务或格式变更时，先等旧任务到终态，避免遗失仍在计费的 task_id。
+    prior_rig_base = state.get("rig_base_task_id")
+    prior_format = state.get("rig_format")
+    if state.get("rig_task_id") and (
+        (prior_rig_base and prior_rig_base != base)
+        or (prior_format and prior_format != RIG_FORMAT)
+    ):
+        resume_task(run_dir, state, "rig", "旧格式绑骨任务", None)
+        clear_stage(run_dir, state, "rig")
+
+    prior_check_base = state.get("prerigcheck_base_task_id")
+    if (state.get("prerigcheck_task_id") and prior_check_base
+            and prior_check_base != base):
+        resume_task(run_dir, state, "prerigcheck", "旧绑骨预检", None)
+        clear_stage(run_dir, state, "prerigcheck")
 
     print("\n" + "=" * 64)
     print("阶段 ④a 绑骨预检（animate_prerigcheck）")
     print("=" * 64)
-    check_id = post_task(
-        {"type": "animate_prerigcheck", "original_model_task_id": base},
-        "animate_prerigcheck",
+    check_result = resume_task(
+        run_dir, state, "prerigcheck", "绑骨预检",
+        lambda: {"type": "animate_prerigcheck", "original_model_task_id": base},
+        {"prerigcheck_base_task_id": base},
     )
-    state["prerigcheck_task_id"] = check_id
-    save_state(run_dir, state)
-
-    result = wait(check_id, "绑骨预检")
-    state["prerigcheck_result"] = result
-    save_state(run_dir, state)
-
-    out = result.get("output", {}) or {}
-    riggable = out.get("riggable", result.get("riggable"))
-    rig_type = out.get("rig_type", result.get("rig_type"))
+    out = check_result.get("output", {}) or {}
+    riggable = out.get("riggable", check_result.get("riggable"))
+    rig_type = out.get("rig_type", check_result.get("rig_type"))
     print(f"    riggable={riggable}  rig_type={rig_type}")
     if not riggable:
         raise RuntimeError("模型未通过绑骨预检（riggable=false）。")
@@ -482,8 +549,9 @@ def stage_rig(run_dir: Path, state: dict) -> dict:
     print("\n" + "=" * 64)
     print(f"阶段 ④b 自动绑骨（animate_rig / {rig_type} / {RIG_SPEC} / {RIG_FORMAT}）")
     print("=" * 64)
-    rig_id = post_task(
-        {
+    rig_result = resume_task(
+        run_dir, state, "rig", f"自动绑骨（{RIG_FORMAT}）",
+        lambda: {
             "type": "animate_rig",
             "original_model_task_id": base,
             "model_version": RIG_MODEL_VERSION,
@@ -491,18 +559,15 @@ def stage_rig(run_dir: Path, state: dict) -> dict:
             "rig_type": rig_type,
             "spec": RIG_SPEC,
         },
-        f"animate_rig ({rig_type})",
+        {"rig_type": rig_type, "rig_format": RIG_FORMAT, "rig_base_task_id": base},
     )
-    state["rig_task_id"] = rig_id
-    state["rig_type"] = rig_type
-    state["rig_format"] = RIG_FORMAT
-    save_state(run_dir, state)
-
-    result = wait(rig_id, "自动绑骨")
-    state["rig_result"] = result
-    save_state(run_dir, state)
-    files = download(result.get("output", {}), run_dir / "03_rigged")
-    state["rigged_files"] = [str(p) for p in files]
+    expected_suffix = f".{RIG_FORMAT}"
+    if not files_ready(state.get("rigged_files"), expected_suffix):
+        files = download(rig_result.get("output", {}), run_dir / "03_rigged")
+        state["rigged_files"] = [str(p) for p in files]
+        save_state(run_dir, state)
+        if not files_ready(state["rigged_files"], expected_suffix):
+            raise RuntimeError(f"Tripo 绑骨任务已完成，但未得到可用的 {RIG_FORMAT.upper()} 文件")
     state["status"] = "success"
     state["finished_at"] = datetime.now().astimezone().isoformat()
     save_state(run_dir, state)
@@ -516,12 +581,10 @@ def stage_rig(run_dir: Path, state: dict) -> dict:
 def main():
     global RIG_FORMAT  # 必须在任何使用 RIG_FORMAT 的语句之前
 
-    ap = argparse.ArgumentParser(description="Tripo T-pose 资产管线")
-    ap.add_argument("--image", default=None,
-                    help="原始照片路径（做参考图用）。续跑时以 state.json 里记录的原图为准，"
-                         "显式传入且不一致会报错，避免静默换图。")
+    ap = argparse.ArgumentParser(description="Tripo 3D 建模与绑骨管线")
+    ap.add_argument("--image", help="--upto ref 时为原始照片；其他阶段为已生成的动漫参考图")
     ap.add_argument("--run", help="已有 run 目录（续跑）")
-    ap.add_argument("--upto", choices=["ref", "model", "rig"], default="ref", help="跑到哪个阶段停")
+    ap.add_argument("--upto", choices=["ref", "model", "rig"], default="rig", help="跑到哪个阶段停")
     ap.add_argument("--skip-texture", action="store_true", help="跳过独立贴图任务")
     ap.add_argument("--out-format", choices=["glb", "fbx"], default=RIG_FORMAT,
                     help="绑骨产物格式。glb 内嵌贴图（推荐）；fbx 贴图是外链绝对路径")
@@ -539,34 +602,44 @@ def main():
         run_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_state(run_dir)
+    if args.upto != "ref" and args.image:
+        source = Path(args.image).resolve()
+        if not source.is_file() or source.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise SystemExit("--image 必须是已生成的 PNG/JPG/WEBP 参考图")
+        recorded_ref = state.get("tpose_ref_image")
+        if recorded_ref:
+            recorded_path = Path(recorded_ref).resolve()
+            if not recorded_path.is_file() or not filecmp.cmp(source, recorded_path, shallow=False):
+                raise SystemExit(
+                    "--image 与这个 run 已记录的动漫参考图不一致；"
+                    "如需更换人物或参考图，请创建新的 run。"
+                )
+        else:
+            dest_dir = run_dir / "00_tpose_ref"
+            dest_dir.mkdir(exist_ok=True)
+            dest = dest_dir / ("tpose_ref" + source.suffix.lower())
+            if source != dest.resolve():
+                shutil.copyfile(source, dest)
+            state["tpose_ref_image"] = str(dest.resolve())
+            state["tpose_ref_files"] = [str(dest.resolve())]
+            save_state(run_dir, state)
+    ref_image = state.get("tpose_ref_image")
+    if args.upto != "ref" and (not ref_image or not Path(ref_image).is_file()):
+        raise SystemExit("缺少动漫 T-pose 参考图；先在网页用阿里百炼生成，或用 --image 导入")
+    source_image = None
+    if args.upto == "ref":
+        recorded_source = state.get("source_image")
+        source_image = Path(args.image or recorded_source).resolve() if (args.image or recorded_source) else None
+        if source_image is None or not source_image.is_file():
+            raise SystemExit("--upto ref 需要可读取的原始照片；请使用 --image 指定")
+        if recorded_source and Path(recorded_source).resolve() != source_image:
+            raise SystemExit("--image 与这个 run 已记录的原始照片不一致；请创建新的 run")
     state.setdefault("status", "running")
 
-    # ★ 原图以 state 里记录的为准，**不乱用 --image 的默认值**。
-    #   踩过的坑：`--upto rig` 续跑时没传 --image，args.image 静默落回
-    #   `DEFAULT_IMAGE = trail.jpg`，于是整个管线（参考图→建模→贴图→绑骨→转 VRM）
-    #   全程照着**另一张照片**跑。每一步都"成功"，产物看起来也正常，
-    #   只有把人物对照一下才发现换人了 —— 这种静默替换比直接报错危险得多。
-    recorded_image = state.get("source_image")
-    explicit_image = Path(args.image).resolve() if args.image else None
-    if recorded_image:
-        image_path = Path(recorded_image).resolve()
-        if explicit_image and explicit_image != image_path:
-            raise SystemExit(
-                f"\n  ✗ 这个 run 用的原图是：\n      {image_path}\n"
-                f"    与 --image 指定的：\n      {explicit_image}\n"
-                f"    不一致。换原图请开一个新的 run（不带 --run），"
-                f"不要续跑旧 run —— 否则产物会混着两张照片的血统。\n"
-            )
-    else:
-        image_path = explicit_image or Path(DEFAULT_IMAGE).resolve()
-        if explicit_image is None:
-            print(f"\n  ⚠️ 未指定 --image，回退到默认图：{image_path}")
     state.setdefault("created_at", datetime.now().astimezone().isoformat())
     state.setdefault("run_dir", str(run_dir))
     state.setdefault("settings", {
         "api_base_url": BASE_URL,
-        "image_model_version": IMAGE_MODEL_VERSION,
-        "image_template": IMAGE_TEMPLATE,
         "model_version": MODEL_VERSION,
         "geometry_quality": GEOMETRY_QUALITY,
         "face_limit": FACE_LIMIT,
@@ -578,35 +651,32 @@ def main():
     })
 
     print("=" * 64)
-    print("Tripo T-pose 管线：参考图 -> T-pose 3D -> 自动绑骨")
+    print("Tripo 3D 管线：已确认参考图 -> 几何/贴图 -> 自动绑骨")
     print("=" * 64)
     print(f"  run 目录 : {run_dir}")
     print(f"  跑到阶段 : {args.upto}")
-    bal, frozen = balance()
-    state["account"] = {"balance_before": bal, "frozen": frozen}
-    print(f"  账户余额 : {bal:g}（冻结 {frozen:g}）")
-    if bal <= 0:
-        raise SystemExit("余额为 0，无法创建计费任务。")
+    try:
+        bal, frozen = balance()
+        state["account"] = {"balance_before": bal, "frozen": frozen}
+        print(f"  账户余额 : {bal:g}（冻结 {frozen:g}）")
+    except Exception as error:
+        bal = None
+        print(f"  暂无法读取余额：{error}；已有任务仍可续查")
+
+    state["status"] = "running"
+    state.pop("error", None)
+    state.pop("failed_at", None)
+    save_state(run_dir, state)
 
     try:
-        # ★ 少了前置阶段就先补跑前置阶段，而不是直接跳到目标阶段。
-        #   `--upto X` 的语义是"跑到 X 为止"，不是"只跑 X"。
-        #   原先这里写的是 `args.upto == "ref" and ...`，于是 `--upto rig`
-        #   在全新 run 上会直接调 stage_model，而那时 state 里还没有参考图，
-        #   必然抛 "缺少 T-pose 参考图"。只有分三段手动跑才碰不到（上一轮就是这么绕过去的）。
-        if "tpose_ref_image" not in state:
-            state = stage_ref(run_dir, state, image_path)
-        if args.upto in {"model", "rig"} and "model_task_id" not in state:
+        if args.upto == "ref":
+            state = stage_ref(run_dir, state, source_image)
+        else:
             state = stage_model(run_dir, state, args.skip_texture)
-        # ★ 不能只判 "rig_task_id 是否存在"：换了 out_format 时必须重绑，
-        # 而旧产物仍然在 state 里，只判存在性会直接跳过。
-        needs_rig = args.upto == "rig" and (
-            "rig_task_id" not in state or state.get("rig_format") != RIG_FORMAT
-        )
-        if needs_rig:
-            state = stage_rig(run_dir, state)
+            if args.upto == "rig":
+                state = stage_rig(run_dir, state, args.skip_texture)
 
-        state.setdefault("status", "success")
+        state["status"] = "success"
         save_state(run_dir, state)
 
     except Exception as err:
@@ -616,13 +686,17 @@ def main():
         save_state(run_dir, state)
         raise
 
-    bal2, _ = balance()
+    try:
+        bal2, _ = balance()
+    except Exception:
+        bal2 = None
     print("\n" + "=" * 64)
     print("完成")
     print("=" * 64)
     print(f"  资产目录 : {run_dir}")
     print(f"  状态文件 : {run_dir/'state.json'}")
-    print(f"  余额变化 : {bal:g} -> {bal2:g} （消耗 {bal-bal2:g}）")
+    if bal is not None and bal2 is not None:
+        print(f"  余额变化 : {bal:g} -> {bal2:g} （消耗 {bal-bal2:g}）")
     for key in ("tpose_ref_image", "geometry_files", "textured_files", "rigged_files"):
         if state.get(key):
             print(f"  {key}:")
@@ -631,7 +705,7 @@ def main():
                 print(f"    - {v}")
     print("=" * 64)
     print(f"\n续跑下一阶段：\n  python {Path(__file__).name} --run \"{run_dir}\" --upto "
-          f"{'model' if args.upto == 'ref' else 'rig'}")
+          f"rig")
 
 
 if __name__ == "__main__":

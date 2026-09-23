@@ -1,34 +1,29 @@
 #!/usr/bin/env node
 /**
- * 照片 → 清洗背景的 T-pose 平面图 → （用户确认后）建模/贴图/绑骨 → VRM
- *
- * 为什么拆成两段跑（而不是一口气跑完）：
- *
- *   Tripo 的阶段②（generate_image / template=t_pose）只花 5 积分，
- *   但它决定了后面所有东西长什么样 —— 一旦背景清洗得不对、或者人物被换掉了，
- *   后面的建模(40)+贴图(20)+绑骨(25) 全是白花的。
- *
- *   所以跑到阶段②就停下，把那 5 积分的平面图给用户看，让他选：
- *       继续生成 / 更换输入图片 / 放弃
- *   这不是"多一步确认"，而是**在花钱之前把判据交到能判断的人手里**。
+ * 两种本机图片流程：
+ *   阿里百炼：照片 → 动漫 T-pose 参考图 → 用户确认 → Tripo 3D → VRM
+ *   Tripo：照片 → 5 积分 T-pose 平面图 → 用户确认 → Tripo 3D → VRM
  *
  * 用法：
- *   node tools/avatar-job.mjs <jobId> ref    只跑到阶段②，然后停在 awaiting_continue
- *   node tools/avatar-job.mjs <jobId> full   接着跑建模/贴图/绑骨/VRM
+ *   node tools/avatar-job.mjs <jobId> image  阿里百炼图片阶段
+ *   node tools/avatar-job.mjs <jobId> model  阿里百炼任务的 Tripo 3D 阶段
+ *   node tools/avatar-job.mjs <jobId> ref    Tripo 平面图阶段
+ *   node tools/avatar-job.mjs <jobId> full   Tripo 平面图任务的 3D 阶段
  */
 import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateAnimeReference } from './aliyun-image.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const web = join(repo, 'web');
 const jobsRoot = resolve(process.env.AVATAR_JOBS_DIR ?? join(repo, 'data', 'avatar-jobs'));
 const id = process.argv[2];
-const stage = process.argv[3] ?? 'ref';
+const stage = process.argv[3] ?? 'image';
 if (!/^[0-9a-f]{32}$/.test(id ?? '')) process.exit(2);
-if (!['ref', 'full'].includes(stage)) process.exit(2);
+if (!['image', 'model', 'ref', 'full'].includes(stage)) process.exit(2);
 const dir = join(jobsRoot, id);
 const jobPath = join(dir, 'job.json');
 
@@ -132,6 +127,7 @@ process.on('SIGINT', () => { void bail('已放弃'); });
 
 async function main() {
   const job = await readJob();
+  if (job.status === 'cancelled') return;
   const python = process.env.TRIPO_PYTHON
     ?? (existsSync(join(repo, 'memory', '.venv', 'bin', 'python'))
       ? join(repo, 'memory', '.venv', 'bin', 'python') : 'python3');
@@ -143,14 +139,12 @@ async function main() {
       : python;
 
   const prompt = [
-    'Transform the reference person into a polished anime character.',
-    'Keep facial identity, hair and recognizable clothing colors.',
-    job.style === 'chibi' ? 'Use a chibi anime style with a full human-compatible body.' :
-      job.style === 'soft' ? 'Use a soft hand-painted anime illustration style.' :
-        'Use a clean Japanese anime character style.',
-    'Full body from head to toe, strict T-pose, straight horizontal arms, palms down, legs slightly apart.',
-    'Facing camera, plain neutral background, no cropped limbs, one person only.',
-    'Completely clean background: remove the original background, no stage, no furniture, no props, no other people.',
+    '以输入照片中的同一个人为原型，只生成一张单人全身动漫立绘，用于后续 3D 建模。整张图片只出现这一个人物、一个正面视角、一个姿势。',
+    '保留五官身份特征、发型、发色、服装款式和主要颜色，不要改变年龄感。',
+    job.style === 'chibi' ? '采用 Q 版动漫画风，但保持清晰完整的人体四肢和手指。' :
+      job.style === 'soft' ? '采用柔和的手绘动漫画风。' : '采用干净的日系动漫赛璐璐画风。',
+    '人物居中、正面面向镜头，摆严格对称的 T-pose：双臂在肩高水平伸直，双手与身体分开，手掌朝下，双腿直立且略微分开。头顶、双手和鞋底都完整入镜，人物尽可能占满画面，同时在四周留少量空白。',
+    '纯浅色背景，均匀光照。不要角色设定板、三视图或多格拼版；不要侧面和背面视图、头部特写、重复人物、文字标注、色卡、道具或多余的肢体。',
   ].join(' ');
   const environment = {
     ...process.env,
@@ -159,16 +153,28 @@ async function main() {
   };
   const pipeline = join(repo, 'tripo', 'tpose_pipeline.py');
 
-  // ── 第一段：只跑到阶段②（背景清洗 + T-pose 平面图），5 积分 ────────────
-  await update({
-    status: 'running', stage: '清洗背景并生成 T-pose 平面图', pid: process.pid, error: null,
-  });
-  await run(pythonExe, [
-    pipeline, '--run', dir, '--image', join(dir, job.image_name), '--upto', 'ref',
-  ], environment);
-  if (cancelled) return;
+  if (stage === 'image') {
+    await update({ status: 'running', stage: '阿里百炼正在生成动漫 T-pose 参考图', pid: process.pid, error: null });
+    await generateAnimeReference({
+      inputPath: join(dir, job.image_name), runDir: dir,
+      provider: process.env.ALIYUN_IMAGE_PROVIDER,
+      model: process.env.ALIYUN_IMAGE_MODEL,
+      baseUrl: process.env.DASHSCOPE_BASE_URL,
+      apiKey: process.env.DASHSCOPE_API_KEY,
+      prompt,
+    });
+    if (cancelled) return;
+    await update({ status: 'image-ready', stage: '动漫参考图已生成，确认后可继续生成 3D',
+      preview_url: '/api/avatar-jobs/' + id + '/reference', pid: null });
+    return;
+  }
 
   if (stage === 'ref') {
+    await update({ status: 'running', stage: '清洗背景并生成 T-pose 平面图', pid: process.pid, error: null });
+    await run(pythonExe, [
+      pipeline, '--run', dir, '--image', join(dir, job.image_name), '--upto', 'ref',
+    ], environment);
+    if (cancelled) return;
     await update({
       status: 'awaiting_continue',
       stage: '平面图已生成，等待你确认',
@@ -178,8 +184,8 @@ async function main() {
     return;
   }
 
-  // ── 第二段：建模 / 贴图 / 绑骨 / 转 VRM（用户确认之后）────────────────
-  await update({ stage: '建模、贴图与绑骨', pid: process.pid });
+  // 两种参考图都由用户确认后进入同一套 3D 建模管线。
+  await update({ status: 'running', stage: '建模、贴图与绑骨', pid: process.pid, error: null });
   await run(pythonExe, [pipeline, '--run', dir, '--upto', 'rig'], environment);
   if (cancelled) return;
 

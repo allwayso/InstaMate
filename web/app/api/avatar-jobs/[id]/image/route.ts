@@ -25,6 +25,9 @@ export async function PUT(request: Request, context: RouteContext<'/api/avatar-j
   const { id } = await context.params;
   const job = await readAvatarJob(id);
   if (!job) return NextResponse.json({ error: '任务不存在' }, { status: 404 });
+  if (job.generation_mode !== 'tripo') {
+    return NextResponse.json({ error: '此任务使用阿里百炼图片流程' }, { status: 409 });
+  }
   if (job.status === 'complete') {
     return NextResponse.json({ error: '任务已完成，不能再换图' }, { status: 409 });
   }

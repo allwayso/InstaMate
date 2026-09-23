@@ -19,6 +19,9 @@ export async function POST(request: Request, context: RouteContext<'/api/avatar-
   const { id } = await context.params;
   const job = await readAvatarJob(id);
   if (!job) return NextResponse.json({ error: '任务不存在' }, { status: 404 });
+  if (job.generation_mode !== 'tripo') {
+    return NextResponse.json({ error: '此任务使用阿里百炼图片流程' }, { status: 409 });
+  }
   if (job.status !== 'awaiting_continue') {
     return NextResponse.json(
       { error: '这个任务当前不在等待确认状态，不能继续' }, { status: 409 });
