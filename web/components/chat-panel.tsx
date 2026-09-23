@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { PcmRecorder } from '@/lib/audio';
+import { describeMicFailure } from '@/lib/mic-diagnostics';
 import { triggerState } from '@/lib/state-events';
 import { speakText, stopSpeaking } from '@/lib/voice';
 import { PROFILE_CHANGE_EVENT, PROFILE_STORAGE_KEY } from '@/lib/profile-selection';
@@ -9,6 +10,11 @@ import { PROFILE_CHANGE_EVENT, PROFILE_STORAGE_KEY } from '@/lib/profile-selecti
 type ChatMessage = { role: 'user' | 'assistant'; content: string; source?: 'voice'; triggered?: string[]; localOnly?: boolean };
 type ChatTrigger = {
   id: string; name: string; emotion: string; duration: number | null; loop: boolean; clip_id: string | null;
+};
+/** 发给后端的可用动作。字段与后端 `PlayableState` 一一对应。 */
+type PlayableStatePayload = {
+  id: string; name: string; trigger_words: string[]; emotion: string;
+  duration: number | null; loop: boolean; clip_id: string | null;
 };
 const STORAGE_KEY = 'instamate-chat-session-v1';
 const newSessionId = () => 'session-' + crypto.randomUUID();
@@ -32,6 +38,36 @@ export default function ChatPanel() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordingBusyRef = useRef(false);
   const sendingRef = useRef(false);
+  /** 上一次取到的可用动作。网络失败时回退用它，避免因为一个附属请求失败而发不出消息。 */
+  const statesRef = useRef<PlayableStatePayload[]>([]);
+
+  /**
+   * 每次发消息前重新拉一次状态库。
+   *
+   * 为什么不缓存到组件里：用户会在 /states 页改触发词、绑 clip、加新动作，
+   * 改完回到聊天页应该**立刻**按新的来，而不是要刷新页面。
+   * 这个请求很便宜（读一个本地 JSON），而发消息本来就要等模型，多这一趟看不出来。
+   */
+  async function refreshStates(): Promise<PlayableStatePayload[]> {
+    try {
+      const response = await fetch('/api/states', { cache: 'no-store' });
+      const data = (await response.json()) as { states?: PlayableStatePayload[] };
+      const list = Array.isArray(data.states) ? data.states : [];
+      const mapped = list.map((state) => ({
+        id: state.id,
+        name: state.name,
+        trigger_words: state.trigger_words ?? [],
+        emotion: state.emotion ?? 'neutral',
+        duration: state.duration ?? null,
+        loop: state.loop ?? false,
+        clip_id: state.clip_id ?? null,
+      }));
+      statesRef.current = mapped;
+      return mapped;
+    } catch {
+      return statesRef.current;
+    }
+  }
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -92,9 +128,16 @@ export default function ChatPanel() {
     setSending(true);
     setMessages((current) => [...current, { role: 'user', content: text, source }]);
     try {
+      // ★ 把可用动作一起发给后端 —— **这是对话触发的唯一入口**。
+      //   没有它，后端 `request.states` 恒为空：既匹配不到触发词，
+      //   也不会把 play_state 工具绑给模型，于是动作永远不会在对话里发生。
+      //   （这一段之前就是缺的，所以整条链路看着完整、实际从不触发。）
+      const states = await refreshStates();
       const response = await fetch('/api/chat', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: text, profile_id: profileId || null }),
+        body: JSON.stringify({
+          session_id: sessionId, message: text, profile_id: profileId || null, states,
+        }),
       });
       const data = await response.json() as { answer?: string; triggers?: ChatTrigger[]; error?: string; local_only?: boolean };
       if (!response.ok || typeof data.answer !== 'string') throw new Error(data.error ?? '对话失败');
@@ -167,8 +210,13 @@ export default function ChatPanel() {
   async function toggleRecording() {
     if (recording) { await finishRecording(); return; }
     if (loading || sending || recognizing || recordingBusyRef.current) return;
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-      setVoiceError('麦克风需要 HTTPS 或 localhost。');
+    if (!window.isSecureContext) {
+      // 和「浏览器不支持」分开报：这两种的修法不同（换地址 vs 换浏览器）
+      setVoiceError(describeMicFailure('insecure'));
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError(describeMicFailure('unsupported'));
       return;
     }
     recordingBusyRef.current = true;

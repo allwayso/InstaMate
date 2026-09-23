@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import filecmp
 import json
 import os
 import re
@@ -526,18 +527,28 @@ def main():
         source = Path(args.image).resolve()
         if not source.is_file() or source.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
             raise SystemExit("--image 必须是已生成的 PNG/JPG/WEBP 参考图")
-        dest_dir = run_dir / "00_tpose_ref"
-        dest_dir.mkdir(exist_ok=True)
-        dest = dest_dir / ("tpose_ref" + source.suffix.lower())
-        if source != dest.resolve():
-            shutil.copyfile(source, dest)
-        state["tpose_ref_image"] = str(dest.resolve())
-        state["tpose_ref_files"] = [str(dest.resolve())]
-        save_state(run_dir, state)
+        recorded_ref = state.get("tpose_ref_image")
+        if recorded_ref:
+            recorded_path = Path(recorded_ref).resolve()
+            if not recorded_path.is_file() or not filecmp.cmp(source, recorded_path, shallow=False):
+                raise SystemExit(
+                    "--image 与这个 run 已记录的动漫参考图不一致；"
+                    "如需更换人物或参考图，请创建新的 run。"
+                )
+        else:
+            dest_dir = run_dir / "00_tpose_ref"
+            dest_dir.mkdir(exist_ok=True)
+            dest = dest_dir / ("tpose_ref" + source.suffix.lower())
+            if source != dest.resolve():
+                shutil.copyfile(source, dest)
+            state["tpose_ref_image"] = str(dest.resolve())
+            state["tpose_ref_files"] = [str(dest.resolve())]
+            save_state(run_dir, state)
     ref_image = state.get("tpose_ref_image")
     if not ref_image or not Path(ref_image).is_file():
         raise SystemExit("缺少动漫 T-pose 参考图；先在网页用阿里百炼生成，或用 --image 导入")
     state.setdefault("status", "running")
+
     state.setdefault("created_at", datetime.now().astimezone().isoformat())
     state.setdefault("run_dir", str(run_dir))
     state.setdefault("settings", {

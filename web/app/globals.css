@@ -303,6 +303,9 @@ main {
   margin: 0 18px 12px;
   color: var(--danger);
   font-size: 13px;
+  /* 麦克风失败信息是多行的（原因 + 设备清单），要保住换行 */
+  white-space: pre-line;
+  line-height: 1.6;
 }
 
 .chat-form {
@@ -411,6 +414,52 @@ main {
 }
 .profile-result a { margin-left: 12px; color: var(--accent); }
 .profile-result li { margin-bottom: 5px; }
+
+/* ── 智能体面板（实际加载的提示词 / memory）────────────────────────────────
+   这个面板的重点是“**能看清全文**”，所以字号比正文小一点、行距大一点，
+   并给一个可滚动的高度上限 —— 提示词可能有几千字，撑开整页会淹没掉上面的导入流程。 */
+.agent-inspector { margin-top: 20px; }
+.agent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.agent-tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+.agent-tabs button {
+  padding: 5px 12px;
+  font-size: 13px;
+  background: #141820;
+}
+.agent-tabs button.is-current {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.agent-text {
+  max-height: 460px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #12141a;
+  color: var(--fg);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.agent-path { margin-top: 10px; color: var(--muted); font-size: 12.5px; line-height: 1.8; }
+.agent-path code {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #12141a;
+  word-break: break-all;
+}
 
 .avatar-creator {
   max-width: 920px;
