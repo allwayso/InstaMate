@@ -4,11 +4,11 @@
   "private": true,
   "scripts": {
     "predev": "npm run sync:mediapipe",
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "prebuild": "npm run sync:mediapipe",
     "build": "next build",
     "prestart": "npm run sync:mediapipe",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "typecheck": "next typegen && tsc --noEmit",
     "validate:clips": "node ../tools/validate-clip.mjs",
     "validate:fixtures": "node ../tools/validate-clip.mjs --fixtures ../tests/fixtures",

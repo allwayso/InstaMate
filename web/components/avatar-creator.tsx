@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { AvatarJob } from '@/lib/avatar-jobs';
+import TripoSettings from '@/components/tripo-settings';
 
 export default function AvatarCreator() {
   const [image, setImage] = useState<File | null>(null);
@@ -13,6 +14,7 @@ export default function AvatarCreator() {
   const [activeId, setActiveId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [tripoReady, setTripoReady] = useState(false);
 
   useEffect(() => {
     if (!image) { setImagePreview(''); return; }
@@ -70,6 +72,7 @@ export default function AvatarCreator() {
     <section className="avatar-creator">
       <h2>照片生成动漫角色</h2>
       <p>照片会先转换为动漫形象，再生成可展示的 3D 角色并保存在本机。提交后可在下方查看进度。</p>
+      <TripoSettings onConfigured={setTripoReady} />
       <div className="avatar-creator-form">
         <label className="upload-field"><strong>上传一张人物照片</strong><small>JPG 或 PNG · 清晰的人物照片效果更好</small>
           {imagePreview && <img className="upload-preview" src={imagePreview} alt="待生成角色的人物照片" />}
@@ -82,7 +85,7 @@ export default function AvatarCreator() {
           <option value="soft">柔和手绘</option>
           <option value="chibi">Q 版动漫</option>
         </select></label>
-        <button type="button" disabled={!image || !name.trim() || busy} onClick={() => void create()}>
+        <button type="button" disabled={!tripoReady || !image || !name.trim() || busy} onClick={() => void create()}>
           {busy ? '正在提交…' : '开始生成模型'}
         </button>
       </div>
