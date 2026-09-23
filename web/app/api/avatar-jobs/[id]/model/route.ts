@@ -32,6 +32,9 @@ export async function POST(request: Request, context: RouteContext<'/api/avatar-
     if (deletionLock) return NextResponse.json({ error: '任务正在清理，请稍后再试' }, { status: 409 });
     const job = await readAvatarJob(id);
     if (!job) return NextResponse.json({ error: '任务不存在' }, { status: 404 });
+    if (job.generation_mode !== 'aliyun') {
+      return NextResponse.json({ error: '此任务使用 Tripo 平面图流程' }, { status: 409 });
+    }
     if (job.status !== 'image-ready' && !(job.status === 'failed' && job.preview_url)) {
       return NextResponse.json({ error: '请先完成动漫图片生成' }, { status: 409 });
     }

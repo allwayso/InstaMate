@@ -1,6 +1,8 @@
-import { lstat, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises';
+import { lstat, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 export interface AvatarJob {
   id: string;
@@ -9,11 +11,13 @@ export interface AvatarJob {
   image_name: string;
   image_provider?: 'qwen' | 'wanx';
   image_model?: string;
-  status: 'queued' | 'running' | 'image-ready' | 'complete' | 'failed';
+  generation_mode?: 'aliyun' | 'tripo';
+  status: 'queued' | 'running' | 'image-ready' | 'awaiting_continue' | 'complete' | 'failed' | 'cancelled';
   stage: string;
-  error?: string;
+  error?: string | null;
   avatar_url?: string;
   preview_url?: string;
+  pid?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -25,10 +29,20 @@ export const AVATAR_JOBS_ROOT = process.env.AVATAR_JOBS_DIR
 export const avatarJobDir = (id: string) => join(AVATAR_JOBS_ROOT, id);
 export const validAvatarJobId = (id: string) => /^[0-9a-f]{32}$/.test(id);
 
+export function avatarGenerationMode(job: AvatarJob): 'aliyun' | 'tripo' {
+  return job.generation_mode ?? (job.image_provider ? 'aliyun' : 'tripo');
+}
+
+export function isInsideDirectory(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
 export async function readAvatarJob(id: string, jobsRoot: string = AVATAR_JOBS_ROOT): Promise<AvatarJob | null> {
   if (!validAvatarJobId(id)) return null;
   try {
     const job = JSON.parse(await readFile(join(jobsRoot, id, 'job.json'), 'utf8')) as AvatarJob;
+    job.generation_mode = avatarGenerationMode(job);
     if (await referencePath(id, jobsRoot)) job.preview_url = '/api/avatar-jobs/' + id + '/reference';
     else delete job.preview_url;
     return job;
@@ -55,7 +69,7 @@ export async function referencePath(id: string, jobsRoot: string = AVATAR_JOBS_R
     };
     if (!state.tpose_ref_image) return null;
     const image = await realpath(state.tpose_ref_image);
-    if (!image.startsWith(dir + '/')) return null;
+    if (!isInsideDirectory(dir, image)) return null;
     if (!/\.(png|jpe?g|webp)$/i.test(image)) return null;
     return image;
   } catch { return null; }
@@ -119,7 +133,9 @@ export async function deleteFinishedAvatarJob(
     const job = JSON.parse(await readFile(jobFile, 'utf8')) as AvatarJob;
     if (job.id !== id) throw new Error('任务记录 ID 不匹配');
     if (job.status === 'queued' || job.status === 'running') return 'active';
-    if (!['image-ready', 'complete', 'failed'].includes(job.status)) throw new Error('任务状态不合法');
+    if (!['image-ready', 'awaiting_continue', 'complete', 'failed', 'cancelled'].includes(job.status)) {
+      throw new Error('任务状态不合法');
+    }
 
     // Do not trust avatar_url from job.json; generated files have fixed id-derived names.
     const avatarRootInfo = await lstat(avatarsRoot).catch((error: NodeJS.ErrnoException) => {
@@ -164,7 +180,7 @@ export async function deleteFinishedAvatarJob(
 }
 
 export async function deleteAllFinishedAvatarJobs(
-  roots: { jobsRoot?: string; avatarsRoot?: string } = {},
+  roots: { jobsRoot?: string; avatarsRoot?: string; generationMode?: 'aliyun' | 'tripo' } = {},
 ): Promise<{ deletedIds: string[]; skippedIds: string[] }> {
   const jobsRoot = resolve(roots.jobsRoot ?? AVATAR_JOBS_ROOT);
   const rootInfo = await lstat(jobsRoot).catch((error: NodeJS.ErrnoException) => {
@@ -178,6 +194,10 @@ export async function deleteAllFinishedAvatarJobs(
   const skippedIds: string[] = [];
   for (const id of names) {
     try {
+      if (roots.generationMode) {
+        const job = await readAvatarJob(id, jobsRoot);
+        if (!job || avatarGenerationMode(job) !== roots.generationMode) continue;
+      }
       const result = await deleteFinishedAvatarJob(id, roots);
       if (result === 'deleted') deletedIds.push(id);
       else if (result !== 'not-found') skippedIds.push(id);
@@ -186,4 +206,66 @@ export async function deleteAllFinishedAvatarJobs(
     }
   }
   return { deletedIds, skippedIds };
+}
+
+export async function writeJobFields(id: string, fields: Partial<AvatarJob>): Promise<void> {
+  if (!validAvatarJobId(id)) throw new Error('任务 ID 不合法');
+  const path = join(avatarJobDir(id), 'job.json');
+  const current = JSON.parse(await readFile(path, 'utf8')) as AvatarJob;
+  const next = { ...current, ...fields, updated_at: new Date().toISOString() };
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(next, null, 2), 'utf8');
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+const execFileAsync = promisify(execFile);
+
+export async function killAvatarJobTree(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    if (process.platform === 'win32') {
+      await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F']);
+    } else {
+      process.kill(-pid, 'SIGTERM');
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function spawnAvatarJob(
+  id: string, stage: 'ref' | 'full', env: Record<string, string | undefined>,
+): Promise<number | undefined> {
+  if (!validAvatarJobId(id)) throw new Error('任务 ID 不合法');
+  const repo = resolve(process.cwd(), '..');
+  const { spawn } = await import('node:child_process');
+  const workerEnv = { ...process.env, ...env };
+  delete workerEnv.DASHSCOPE_API_KEY;
+  delete workerEnv.DASHSCOPE_BASE_URL;
+  delete workerEnv.DASHSCOPE_WS_URL;
+  const child = spawn(process.execPath, [join(repo, 'tools', 'avatar-job.mjs'), id, stage], {
+    cwd: repo, env: workerEnv, detached: true, stdio: 'ignore',
+  });
+  await new Promise<void>((done, failed) => {
+    child.once('spawn', done);
+    child.once('error', failed);
+  });
+  child.unref();
+  return child.pid;
+}
+
+export async function resetAvatarJobState(id: string): Promise<void> {
+  if (!validAvatarJobId(id)) throw new Error('任务 ID 不合法');
+  const dir = avatarJobDir(id);
+  await rm(join(dir, 'state.json'), { force: true });
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    if (/^0[0-9]_/.test(name) || /^[123][0-9]_/.test(name)) {
+      await rm(join(dir, name), { recursive: true, force: true });
+    }
+  }
 }

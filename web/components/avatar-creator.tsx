@@ -12,6 +12,10 @@ function isPending(job: AvatarJob) {
   return job.status === 'queued' || job.status === 'running';
 }
 
+function isAliyunJob(job: AvatarJob) {
+  return job.generation_mode === 'aliyun' || Boolean(job.image_provider);
+}
+
 function mergeJobs(current: AvatarJob[], incoming: AvatarJob[], deleted: Set<string>) {
   const byId = new Map(current.filter((job) => !deleted.has(job.id)).map((job) => [job.id, job]));
   for (const job of incoming) {
@@ -25,7 +29,8 @@ function mergeJobs(current: AvatarJob[], incoming: AvatarJob[], deleted: Set<str
 function statusText(job: AvatarJob) {
   return {
     queued: '等待中', running: '生成中', 'image-ready': '图片已完成',
-    complete: '3D 已完成', failed: '生成失败',
+    awaiting_continue: '等待确认', complete: '3D 已完成',
+    failed: '生成失败', cancelled: '已放弃',
   }[job.status];
 }
 
@@ -74,7 +79,7 @@ export default function AvatarCreator() {
       .then(async (response) => {
         const data = await response.json() as { jobs?: AvatarJob[]; error?: string };
         if (!response.ok) throw new Error(data.error ?? '无法读取生成记录');
-        return data.jobs ?? [];
+        return (data.jobs ?? []).filter(isAliyunJob);
       })
       .then((incoming) => {
         if (!cancelled) setJobs((current) => mergeJobs(current, incoming, deletedIds.current));
@@ -93,7 +98,8 @@ export default function AvatarCreator() {
         const response = await fetch('/api/avatar-jobs', { cache: 'no-store' });
         const data = await response.json() as { jobs?: AvatarJob[]; error?: string };
         if (!response.ok) throw new Error(data.error ?? '无法更新任务状态');
-        if (!cancelled) setJobs((current) => mergeJobs(current, data.jobs ?? [], deletedIds.current));
+        if (!cancelled) setJobs((current) => mergeJobs(current,
+          (data.jobs ?? []).filter(isAliyunJob), deletedIds.current));
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : '无法更新任务状态');
       }
@@ -110,6 +116,7 @@ export default function AvatarCreator() {
       form.set('image', image);
       form.set('name', name.trim());
       form.set('style', style);
+      form.set('generation_mode', 'aliyun');
       const response = await fetch('/api/avatar-jobs', { method: 'POST', body: form });
       const data = await response.json() as AvatarJob & { error?: string };
       if (!response.ok || !data.id) throw new Error(data.error ?? '动漫图片任务创建失败');
@@ -155,7 +162,7 @@ export default function AvatarCreator() {
     if (deleting || !clearableJobs.length) return;
     setDeleting('all'); setError(''); setNotice('');
     try {
-      const response = await fetch('/api/avatar-jobs', { method: 'DELETE' });
+      const response = await fetch('/api/avatar-jobs?generation_mode=aliyun', { method: 'DELETE' });
       const data = await response.json() as { deletedIds?: string[]; skippedIds?: string[]; error?: string };
       if (!response.ok || !Array.isArray(data.deletedIds)) throw new Error(data.error ?? '清理生成记录失败');
       for (const id of data.deletedIds) deletedIds.current.add(id);
@@ -212,7 +219,7 @@ export default function AvatarCreator() {
       <div id="avatar-image-panel" role="tabpanel" aria-labelledby="avatar-image-tab"
         className="avatar-workflow-pane" hidden={workspace !== 'image'}>
           <h2>照片生成动漫角色</h2>
-          <p className="avatar-pane-intro">使用阿里百炼将人物照片转换为动漫 T-pose 参考图。图片满意后，可到顶部的「3D 建模」模块继续。</p>
+          <p className="avatar-pane-intro">使用阿里百炼将人物照片转换为动漫 T-pose 参考图。图片满意后，可到顶部的「3D 建模」模块继续。也可以<Link href="/create/tripo">使用 Tripo 平面图流程</Link>。</p>
           <AliyunImageSettings onConfigured={setAliyunReady} />
           <div className="avatar-creator-form">
             <label className="upload-field"><strong>上传一张人物照片</strong><small>JPG 或 PNG · 清晰的人物照片效果更好</small>

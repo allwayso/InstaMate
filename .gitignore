@@ -65,6 +65,15 @@ __pycache__/
 *.glb
 *.usdz
 
+# 可供所有用户在角色选择器中使用的产品 VRM，通过 Git LFS 分发。
+# ★ 但只放行**产品角色**。生成的角色用 32 位 hex 命名，仍然忽略 ——
+#   否则每跑一次「照片生成角色」就会在 git status 里多一个未跟踪的 15 MB VRM，
+#   而它们只是本机产物（`data/avatar-jobs/` 里已经有一份可重新生成的）。
+!web/public/avatars/companion-*.vrm
+!web/public/avatars/sample.vrm
+!web/public/avatars/compat.vrm
+web/public/avatars/[0-9a-f][0-9a-f]*.vrm
+
 # MediaPipe 的 wasm/模型（约 38 MB）：由 npm 包派生，用
 #   node tools/sync-mediapipe.mjs
 # 生成，所以不进仓库。
