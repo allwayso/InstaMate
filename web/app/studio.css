@@ -351,8 +351,9 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .mocap-grid {
     gap: 18px 14px;
     grid-template-columns: minmax(300px, var(--split, 38%)) 16px minmax(0, 1fr);
-    /* 中间行高度跟着视口走：整页第一屏刚好撑满，又不被画布反馈撑爆 */
-    grid-template-rows: auto minmax(380px, calc(100dvh - 650px)) auto;
+    /* 中间行 = 视口高 − 固定 chrome（导航/页头/步骤条/控制条 ≈ 430px）：
+       第一屏刚好撑满，动作库留在下方滚动区；画布已脱离文档流，不会反馈撑爆 */
+    grid-template-rows: auto minmax(360px, calc(100dvh - 430px)) auto;
     align-items: stretch; /* 覆盖 globals 的 align-items:start，让两个面板同高撑满整行 */
   }
   /* 分栏拖把手 */
@@ -373,6 +374,11 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .camera-diagnostics { margin-top: 10px; }
   .camera-diagnostics > summary { min-height: 34px; padding: 8px 0; }
   .camera-stage, .mocap-preview-mount { flex: 1; width: 100%; height: auto; min-height: 0; aspect-ratio: auto; margin: 0; }
+  /* 画面内容脱离文档流：不参与高度计算，避免"画布撑大行高 → 行高又撑大画布"的循环 */
+  .camera-stage { position: relative; }
+  .camera-stage .camera-video { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .mocap-preview-mount { position: relative; }
+  .mocap-preview-mount canvas { position: absolute; inset: 0; }
 }
 @media (max-width: 1200px) {
   main, .mocap-page { padding-left: 26px; padding-right: 26px; }
