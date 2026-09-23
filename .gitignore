@@ -35,3 +35,11 @@ node_modules/
 
 # G0 本地证据（截图等），不入库
 .g0/
+
+# Tripo 管线产物（模型/贴图/中间图，体积大且可重新生成）
+tripo/output/
+tripo/.upload_probe.json
+
+# Tripo API 凭据与 Python 缓存（★ 密钥绝不能入库）
+tripo/.env
+tripo/__pycache__/
