@@ -1,6 +1,10 @@
-# InstaMate 影伴
+<p align="center">
+  <img src="assets/logo/instamate-logo-3d.png" alt="InstaMate 影伴 logo" width="180" />
+</p>
 
-从一组照片、一段聊天记录还原出一个和你共享记忆的 3D 桌面伙伴
+<h1 align="center">InstaMate 影伴</h1>
+
+<p align="center">从一组照片、一段聊天记录还原出一个和你共享记忆的 3D 桌面伙伴</p>
 
 > 当前进度：已打通 **静态 VRM 渲染（G0）**、**程序化动作播放（G1）**、
 > **摄像头动作录入与动作库（G2，实现完成；真人摄像头验收待执行）**，
