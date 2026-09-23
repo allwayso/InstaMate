@@ -86,6 +86,15 @@ def get_chat_model() -> ChatOpenAI:
         model=settings.model_name,
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
+        # ★ temperature 必须显式设低。
+        #   原来没设，用厂商默认（较高）—— 后果不是“回答更有趣”，而是
+        #   **不可靠地遵守工具调用**：在同一段会话历史里，模型会去模仿历史中的
+        #   写法（把动作写成文字“（挥手）”）而不是调用 play_state。
+        #   实测：同样条件、同一段被污染的会话，temperature=0 能稳定调工具，
+        #   不设则不调。
+        #   这里要的是可复现的动作触发，不是创意；人设的“活”靠档案提示词，
+        #   不靠采样温度。
+        temperature=0,
     )
 
 
@@ -140,7 +149,11 @@ def chat_with_states(request: ChatRequest) -> ChatResponse:
         "type": "function",
         "function": {
             "name": "play_state",
-            "description": "让桌面上的 3D 角色播放一个状态动作。用户问候或明确要求动作时选择最合适的状态。",
+            "description": (
+                "让桌面上的 3D 角色播放一个动作。用户问候、道别、应声，"
+                "或聊到情绪、提出想看某个动作时选一个最贴切的；"
+                "纯信息问答时不要调用。每轮最多一个。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"state_id": {"type": "string", "enum": list(states)}},
@@ -148,14 +161,44 @@ def chat_with_states(request: ChatRequest) -> ChatResponse:
             },
         },
     }
+    # 描述里带上情绪和触发词：模型是在这些字面上做选择的，
+    # 只给 name 的话它无法区分「双手轮流摇摆」和「左右摇摆」什么时候用。
     state_descriptions = "；".join(
-        f"{state.name}({state.id}；触发词：{'、'.join(state.trigger_words) or '无'})"
+        f"{state.name}({state.id}；情绪：{state.emotion}"
+        f"；触发词：{'、'.join(state.trigger_words) or '无'})"
         for state in request.states
     )
+    # ★ 触发词不再“抢在模型前面直接播”，而是降级为一条**提示**，
+    #   并且命中时把工具设为**必调**。
+    #
+    #   实测数据（temperature=0，同一句「你好呀」）：
+    #     auto 模式：qwen-plus 在被括号动作污染过的会话里**不调工具**，
+    #                而是把「（右手挥手）」写进回复文字 —— 文字不会触发任何东西；
+    #                换成 qwen3.5-plus 能调但 41 秒。
+    #     required：qwen-plus 0.7 秒，而且**仍然自己选是哪一个**动作。
+    #
+    #   所以这里的分工是：
+    #     命中触发词  → required：保证动作真的发生（但“选哪个”还是模型定）
+    #     没命中      → auto：完全由模型决定要不要做、做哪个
+    #   换句话说，触发词只决定“此刻要不要动作”，**不决定“做哪个”**。
+    #   想让模型完全自由（即使聊到问候也不一定动），把 /states 里的触发词清掉即可。
     matched = matching_state(request.message, request.states)
+    hint = (
+        f"\n（这条消息命中了「{matched.name}」的触发词，请从可用状态里挑一个最贴切的。）"
+        if matched else ""
+    )
     action_instruction = (
-        f"已按触发词播放「{matched.name}」，请直接回应，不要再调用动作。" if matched else
-        "问候或明确的动作请求要调用 play_state；没有合适状态时正常聊天。"
+        "你的桌面角色会做动作。遇到问候、道别、应声，或用户聊到情绪、"
+        "提出想看某个动作时，调用 play_state 选一个最贴切的动作；"
+        "纯信息问答、用户正专注做事时就不要调，不要每句都做动作。"
+        # ★ 这条是实测加的，不是防患于未然：
+        #   模型会把动作**写进回复文字**（“（右手挥手）”“刚挥完手”），
+        #   而文字不会触发任何东西。更麻烦的是它自强化 —— 历史里有一句
+        #   “（右手挥手）”，之后就一路照着模仿下去，永远不再调工具。
+        #   所以把“文字描写动作是无效的”说破，而不是指望模型自己不说。
+        "动作只能通过 play_state 触发。不要在回复里描写动作、也不要用括号补动作"
+        "（例如“（挥手）”）—— 那样不会发生任何事。要么调工具，要么就不做动作。"
+        + hint
     )
     # ★ 系统提示词来自**实际选中的档案文件**（选不选都是同一条路径）。
     #   原来这里是 `settings.system_prompt + profiles.prompt_context(profile_id)`，
@@ -168,16 +211,37 @@ def chat_with_states(request: ChatRequest) -> ChatResponse:
     history = memory_store.for_session(request.session_id)
     human = HumanMessage(content=request.message)
     messages = [system, *history.messages, human]
-    triggers: list[Trigger] = [Trigger(**matched.model_dump(exclude={"trigger_words"}))] if matched else []
+    # triggers 现在**只来自模型的选择**（原来是 matched 命中就预填）。
+    triggers: list[Trigger] = []
     try:
         model = get_chat_model()
     except ModelNotConfigured:
+        # ★ 没有模型时的兜底：这时没人能做选择，
+        #   与其“什么都不发生”，不如让确定性触发词生效，至少本地演示能动起来。
         if not matched:
             raise
         answer = "你好！很高兴见到你。" if matched.clip_id == "wave-right-hand" else f"好的，我来做「{matched.name}」。"
         history.add_messages([human, AIMessage(content=answer)])
+        triggers.append(Trigger(**matched.model_dump(exclude={"trigger_words"})))
         return ChatResponse(session_id=request.session_id, answer=answer, triggers=triggers, local_only=True)
-    first = (model if matched or not states else model.bind_tools([tool], tool_choice="auto")).invoke(messages)
+    # 有动作可选就把工具绑上去，让模型自己决定要不要调、调哪个。
+    # 命中触发词时用 required：模型仍然选哪个，但不能选“什么都不做”——
+    # 因为“配了触发词却什么都没发生”对用户来说就是坏了。
+    if not states:
+        first = model.invoke(messages)
+    else:
+        choice = "required" if matched else "auto"
+        try:
+            first = model.bind_tools([tool], tool_choice=choice).invoke(messages)
+        except Exception as error:  # noqa: BLE001
+            # ★ 思考型模型（qwen3.5-plus / qwen3.8-max 这类）会直接报
+            #   “tool_choice does not support being set to required in thinking mode”。
+            #   这时不能整个请求失败 —— 退回 auto，宁可这一次可能不触发，
+            #   也不要让用户看到“对话报错”。只对 tool_choice 相关的报错这幺做，
+            #   其它异常（网络、密钥、限流）原样抛出，否则会把真问题掩盖成“没动作”。
+            if "tool_choice" not in str(error):
+                raise
+            first = model.bind_tools([tool], tool_choice="auto").invoke(messages)
     if isinstance(first, AIMessage) and first.tool_calls:
         messages.append(first)
         for call in first.tool_calls:
