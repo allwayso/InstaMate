@@ -351,9 +351,8 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .mocap-grid {
     gap: 18px 14px;
     grid-template-columns: minmax(300px, var(--split, 38%)) 16px minmax(0, 1fr);
-    /* 中间行 = 视口高 − 固定 chrome（导航/页头/步骤条/控制条 ≈ 430px）：
-       第一屏刚好撑满，动作库留在下方滚动区；画布已脱离文档流，不会反馈撑爆 */
-    grid-template-rows: auto minmax(360px, calc(100dvh - 430px)) auto;
+    /* 给动作预览留足高度；动作库排在画面下方滚动区域。 */
+    grid-template-rows: auto minmax(580px, calc(100dvh - 330px)) auto;
     align-items: stretch; /* 覆盖 globals 的 align-items:start，让两个面板同高撑满整行 */
   }
   /* 分栏拖把手 */
@@ -374,8 +373,8 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .camera-diagnostics { margin-top: 10px; }
   .camera-diagnostics > summary { min-height: 34px; padding: 8px 0; }
   .camera-stage, .mocap-preview-mount { flex: 1; width: 100%; height: auto; min-height: 0; aspect-ratio: auto; margin: 0; }
-  /* 影伴预览：方形（1:1）舞台，以可用高度为准、水平居中 */
-  .mocap-preview-mount { width: auto; max-width: 100%; aspect-ratio: 1 / 1; align-self: center; }
+  /* 影伴画布铺满右侧面板，避免缩成居中的小正方形。 */
+  .mocap-preview-mount { align-self: stretch; }
   /* 画面内容脱离文档流：不参与高度计算，避免"画布撑大行高 → 行高又撑大画布"的循环 */
   .camera-stage { position: relative; }
   .camera-stage .camera-video { position: absolute; inset: 0; width: 100%; height: 100%; }
