@@ -315,6 +315,30 @@ const KALIDOKIT_REST_FULL = {
 const FACE_REST = { head: { x: 0, y: 0, z: 0 } };
 
 /**
+ * ★ Kalidokit 在"手臂自然下垂"时的【真实】输出（实测，不是 RestingDefault）。
+ *
+ * 为什么单列一份：`KALIDOKIT_REST` 用的 {x:0, y:0, z:∓1.25} 其实是 Kalidokit 的
+ * `RestingDefault` —— 它只在**离屏守卫触发**时才被写出（源码 838-845 行，
+ * 条件是 `lm3d[15].y > 0.1`，即手腕比髖低 10cm）。
+ *
+ * 实测：用户的真实录制里腕部 y 全程在 [-0.98, +0.09]，**守卫一次都没触发**；
+ * 我合成的"严格竖直下垂"里腕部也只在 y≈-0.09（仍在髖上方）。
+ * 也就是说日常站姿走的是 `calcArms` 的常规分支，**x/y 并不为零**。
+ *
+ * 下面这组值 = 用真实录制量出的手臂比例（上臂 0.199m / 前臂 0.200m）合成
+ * 严格竖直下垂的关键点，再跑 `Kalidokit.Pose.solve` 得到的输出。
+ */
+const KALIDOKIT_ARMS_DOWN_REAL = {
+  RightUpperArm: { x: 0.2, y: 1.0572, z: -1.084 },
+  LeftUpperArm: { x: -0.2, y: -0.905, z: 1.084 },
+  RightLowerArm: { x: 0.3, y: 0.0273, z: 0 },
+  LeftLowerArm: { x: 0.3, y: -0.0273, z: 0 },
+  RightHand: { x: 0, y: 0, z: 0 },
+  LeftHand: { x: 0, y: 0, z: 0 },
+  Spine: { x: 0, y: 0, z: 0 },
+};
+
+/**
  * 手部的静息输出（HandSolver 形状）：腕 + 5 指 × 3 段，全为 0。
  * 腕部现在走 HandSolver 而不是 PoseSolver，所以校准测试也必须喂它。
  */
@@ -575,46 +599,54 @@ test('校准：时长不足必须拒绝', () => {
   assert.ok(out.issues.some((s) => s.includes('时长不足')));
 });
 
-test('★★ 校准：标定时把手抬起来 → 必须被拒绝（这是真人踩过的坑）', () => {
-  // 实测场景：标定时手臂是抬着的，于是 Qneutral 记的是"抬手姿态"，
-  // 整段偏移被算错 —— 表现为"肘反了""举不过头顶""转头反了"，
-  // 而且这些现象互相矛盾，很难从渲染结果反推。
-  // 关键线索是"不加校准反而是对的"。
-  const K_RAISED = {
-    ...KALIDOKIT_REST_FULL,
-    RightUpperArm: { x: 0, y: 0, z: -0.3 },
-    LeftUpperArm: { x: 0, y: 0, z: 0.3 },
-  };
+test('★★ 修正量大小【无法】区分标定姿势对错 —— 这是把校准弄坏过的判据', () => {
+  // 复盘：曾经设过 CALIBRATION_MAX_CORRECTION_DEG = 40 当门槛，理由是
+  // "姿势正确时修正量应当很小"。那个理由只对上臂的 z 分量成立
+  // （Kalidokit 静息 ∓1.25 vs 我们 ±72°，差 0.38°），但 ARM_AXES 把 x/y 也映射了进来，
+  // 而 rigArm() 对它们做了非线性变形（乘 PI、减下臂分量、clamp），零点并不在"手臂下垂"，
+  // 于是合成四元数**模长接近、轴完全不同**，差值被放大到几十度。
+  //
+  // 实测扫描（真实手臂比例合成关键点，跑完整 Kalidokit → retarget → computeCorrections）：
+  //     下垂角   0°    15°    30°    45°    60°    75°    90°
+  //     修正量 77.4°  63.3°  51.1°  43.7°  44.4°  52.9°  88.1°
+  // 全部超过 40°，包括正确的那个；而当初"抬手标定"那次是 54.8°，正落在正常范围中间。
+  // ⇒ 没有任何阈值能把它和正确姿势分开。
+  //
+  // 本测试锁两条：① 自然下垂的真实输入修正量确实很大（不是"应当很小"）；
+  //               ② 它【不再】导致校准失败（回归的那次既失败、又把原因怪到用户姿势上）。
   const rt = (pose) => retarget({ pose, face: FACE_REST, hands: HANDS_REST }, true).pose;
-  const GOOD = { ok: true, canonical: rt(KALIDOKIT_REST_FULL) };
-  const BAD = { ok: true, canonical: rt(K_RAISED) };
-
   const runWith = (canonical) => {
-    const frames = [];
     const conf = {};
     for (const b of RETARGET_TARGET_BONES) conf[b] = 0.9;
+    const frames = [];
     for (let i = 0; i < 65; i++) {
       frames.push({ timestampMs: i * 25, tracked: true, confidence: conf, canonical });
     }
     return runCalibration(frames);
   };
 
-  const good = runWith(GOOD.canonical);
-  assert.equal(good.ok, true, `自然站姿应当通过：${good.issues.join('; ')}`);
-  // 上界取 10°：其中 8° 来自我们的自然屈肘（BASE_STANDING_POSE 的 NATURAL_ELBOW_DEG），
-  // 而 Kalidokit 的前臂静息是 0 —— 这 8° 是**正确**的，不是姿势错误。
-  // 上臂只有 0.38°（Kalidokit ∓1.25 rad vs 我们 ±72°，差 0.4°）。
-  assert.ok(good.maxCorrectionDeg < 10, `自然站姿的修正量应当很小，实际 ${good.maxCorrectionDeg.toFixed(2)}°`);
-  assert.equal(good.worstBone, 'rightLowerArm', '自然站姿下最大的修正是前臂的自然屈肘');
-
-  const bad = runWith(BAD.canonical);
-  assert.equal(bad.ok, false, '抬着手的标定姿势必须被拒绝');
-  assert.ok(
-    bad.issues.some((x) => x.includes('偏离自然站姿')),
-    `应当明确说是姿势问题：${bad.issues.join('; ')}`,
+  const natural = runWith(rt(KALIDOKIT_ARMS_DOWN_REAL));
+  assert.equal(
+    natural.ok,
+    true,
+    `自然站姿必须通过 —— 修正量大【不是】姿势错的证据：${natural.issues.join('; ')}`,
   );
-  assert.ok(bad.maxCorrectionDeg > 30, `修正量应当明显超过容差，实际 ${bad.maxCorrectionDeg.toFixed(2)}°`);
-  assert.deepEqual(bad.corrections, {}, '被拒绝时不能给出修正量');
+  assert.ok(
+    natural.maxCorrectionDeg > 40,
+    `实测自然下垂的修正量本来就在 43–89°，不该是"很小"。实际 ${natural.maxCorrectionDeg.toFixed(2)}°`,
+  );
+
+  // 手抬到水平（T-pose）时的修正量也在同一区间 —— 这就是它没有分辨力的证明
+  const raised = runWith(rt({
+    ...KALIDOKIT_ARMS_DOWN_REAL,
+    RightUpperArm: { x: 0.2, y: -0.368, z: 0 },
+    LeftUpperArm: { x: -0.2, y: 0.368, z: 0 },
+  }));
+  assert.equal(raised.ok, true, '校准不再因为修正量大而失败');
+  assert.ok(
+    Math.abs(raised.maxCorrectionDeg - natural.maxCorrectionDeg) < 40,
+    '两者修正量在同一量级 ⇒ 拿它当判据没有分辨力',
+  );
 });
 
 test('校准：肩肘腕置信度不足的帧被排除出平均，并在 issues 里说清', () => {
