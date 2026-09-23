@@ -18,7 +18,13 @@ test('Tripo 设置保存到本机文件，保留其它字段且不向页面回�
       configured: true, keySource: 'local-file', baseUrl: DEFAULT_TRIPO_BASE_URL,
     });
     assert.equal(JSON.stringify(status).includes('tsk_new_key'), false);
-    assert.equal(statSync(path).mode & 0o777, 0o600);
+    // ★ 权限收紧只在 POSIX 平台可验证。Windows 没有 POSIX 权限位：
+    //   statSync().mode 恒为 0o666（只有「只读」属性会体现在 mode 上），
+    //   所以这条断言在 Windows 上**无条件失败** —— 与实现对不对无关。
+    //   断言保留在 Linux/macOS 上跑，那里 0o600 是真实且必须保证的行为。
+    if (process.platform !== 'win32') {
+      assert.equal(statSync(path).mode & 0o777, 0o600);
+    }
     const content = readFileSync(path, 'utf8');
     assert.match(content, /TRIPO_MODEL_VERSION=v3\.1/);
     assert.doesNotMatch(content, /old_key/);
