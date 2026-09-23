@@ -3,8 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "npm run sync:mediapipe",
     "dev": "next dev",
+    "prebuild": "npm run sync:mediapipe",
     "build": "next build",
+    "prestart": "npm run sync:mediapipe",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
     "validate:clips": "node ../tools/validate-clip.mjs",

@@ -12,26 +12,22 @@
  * 所以：把文件复制进 public/，并让 `locateFile` 恒定返回 `/vendor/mediapipe/holistic/<file>`。
  * 同时提供 `--check`，让页面启动前能明确报错「缺哪个文件」，而不是静默失败。
  *
- * 文件清单不在这里 —— 在 `web/lib/mocap/mediapipe-assets.ts`（单一真相源），
- * 运行时自检与页面用的是同一份。Node 直接 import .ts 是 G1 就验证过的做法。
+ * 文件清单在 `web/lib/mocap/mediapipe-manifest.json`，与浏览器自检共享。
+ * 使用 JSON 避免启动钩子依赖 Node 22+ 才提供的 TypeScript 直接执行能力。
  */
 import { existsSync, mkdirSync, readFileSync, statSync, copyFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  MEDIAPIPE_HOLISTIC_VERSION as PINNED_VERSION,
-  MEDIAPIPE_PACKAGE_DIR,
-  VENDOR_DIR,
-  REQUIRED_VENDOR_FILES,
-  SKIPPED_VENDOR_FILES,
-} from '../web/lib/mocap/mediapipe-assets.ts';
-
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const manifest = JSON.parse(readFileSync(join(ROOT, 'web/lib/mocap/mediapipe-manifest.json'), 'utf8'));
+const PINNED_VERSION = manifest.version;
+const MEDIAPIPE_PACKAGE_DIR = manifest.packageDir;
+const VENDOR_DIR = manifest.vendorDir;
 const SRC_DIR = join(ROOT, MEDIAPIPE_PACKAGE_DIR);
 const OUT_DIR = join(ROOT, VENDOR_DIR);
-const REQUIRED = [...REQUIRED_VENDOR_FILES];
-const SKIPPED = [...SKIPPED_VENDOR_FILES];
+const REQUIRED = [...manifest.directFiles, ...manifest.loaderFiles];
+const SKIPPED = manifest.skippedFiles;
 
 const args = process.argv.slice(2);
 const checkOnly = args.includes('--check');

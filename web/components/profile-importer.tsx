@@ -100,6 +100,11 @@ export default function ProfileImporter() {
     <section className="profile-panel">
       <h2>导入聊天记忆</h2>
       <p>上传包含微信聊天 TXT 的 ZIP，选择要分析的人。原始 ZIP 只在解析时使用，网页不会公开聊天内容。</p>
+      <div className="profile-steps" aria-label="导入流程">
+        <span className={!archiveId ? 'is-current' : ''}>01 选择聊天 ZIP</span>
+        <span className={archiveId && !profile ? 'is-current' : ''}>02 选择人物并分析</span>
+        <span className={profile ? 'is-current' : ''}>03 确认并用于对话</span>
+      </div>
       <div className="profile-actions">
         <input type="file" accept=".zip,application/zip" aria-label="聊天 ZIP"
           onChange={(event) => { setFile(event.target.files?.[0] ?? null); setArchiveId(''); setSpeakers([]); }} />

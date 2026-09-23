@@ -165,7 +165,7 @@ export default function LandmarkOverlay({
     <canvas
       ref={canvasRef}
       className="mocap-overlay"
-      style={{ width, height }}
+      style={{ width: '100%', height: '100%' }}
       width={width}
       height={height}
     />

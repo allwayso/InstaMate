@@ -51,7 +51,9 @@ import {
   probeRestingDefaultGuard,
   type MocapSolver,
 } from '@/lib/mocap/kalidokit-solver';
-import { checkVendorFiles } from '@/lib/mocap/mediapipe-assets';
+import PageHeading from '@/components/page-heading';
+import { stateAfterCameraStatus, type MachineState } from '@/lib/mocap/capture-state';
+export type { MachineState } from '@/lib/mocap/capture-state';
 import {
   fetchCatalog,
   loadClipFile,
@@ -61,19 +63,6 @@ import {
 import { validateClipFile } from '@/lib/contracts';
 import { HUMAN_BONES_VRM1 as HUMAN_BONES } from '@/lib/contracts';
 import type { ClipFile } from '@/lib/clip-spec';
-
-export type MachineState =
-  | 'camera-off'
-  | 'loading-model'
-  | 'detecting'
-  | 'calibrating'
-  | 'ready'
-  | 'countdown'
-  | 'recording'
-  | 'processing'
-  | 'reviewing'
-  | 'saving'
-  | 'error';
 
 const STATE_LABEL: Record<MachineState, string> = {
   'camera-off': '等待启动摄像头',
@@ -114,7 +103,6 @@ export default function MotionLibraryPage() {
 
   // ── UI 状态 ──────────────────────────────────────────────────────────
   const [notice, setNotice] = useState<{ kind: 'info' | 'warn' | 'error'; text: string } | null>(null);
-  const [vendor, setVendor] = useState<{ ok: boolean; missing: string[]; checked: number } | null>(null);
   const [calibration, setCalibration] = useState<CalibrationOutcome | null>(null);
   const [calibProgress, setCalibProgress] = useState(0);
   const [recOutcome, setRecOutcome] = useState<RecordingOutcome | null>(null);
@@ -204,11 +192,6 @@ export default function MotionLibraryPage() {
   swapRef.current = swap;
 
   const base = useMemo(basePoseAll, []);
-
-  // ── 启动自检：本地资源齐不齐 ─────────────────────────────────────────
-  useEffect(() => {
-    checkVendorFiles().then(setVendor);
-  }, []);
 
   // ── 动作目录 ─────────────────────────────────────────────────────────
   const refreshCatalog = useCallback(async () => {
@@ -830,30 +813,15 @@ export default function MotionLibraryPage() {
   const busy = state === 'saving' || state === 'processing';
 
   return (
-    <main className="mocap-page">
-      <header className="mocap-header">
-        <h1>动作录入与动作库</h1>
-        <nav>
-          <a href="/">角色调试台</a>
-        </nav>
-        <span className={`state-badge state-${state}`}>{STATE_LABEL[state]}</span>
-      </header>
-
-      {!RETARGET_IS_MEASURED && (
-        <div className="banner warn">
-          <strong>轴向映射尚未实测</strong>：Kalidokit 的输出是它自己调过的 rig 空间，
-          左右与轴符号必须用真人动作标定。在此之前动作方向可能不对 ——
-          这是刻意的显式状态，不是 bug。下方「左右交换」开关用于标定。
-        </div>
-      )}
-
-      {vendor && !vendor.ok && (
-        <div className="banner error">
-          <strong>MediaPipe 本地资源缺失 {vendor.missing.length}/{vendor.checked}</strong>
-          <pre>{vendor.missing.join('\n')}</pre>
-          在仓库根目录执行：<code>node tools/sync-mediapipe.mjs</code>
-        </div>
-      )}
+    <main id="main-content" className="mocap-page">
+      <PageHeading eyebrow="把动作变成表达" title="动作工作室" description="捕捉你的动作，预览影伴的回应，保存为可以反复使用的动作。">
+        <span className={`state-badge state-${state}`} role="status">{STATE_LABEL[state]}</span>
+      </PageHeading>
+      <ol className="workflow-steps" aria-label="动作录入流程">
+        <li className={['camera-off', 'loading-model', 'detecting', 'error'].includes(state) ? 'is-current' : ''}><span>01</span><div><strong>连接摄像头</strong><small>站在画面中央，预览识别效果</small></div></li>
+        <li className={['ready', 'calibrating', 'countdown', 'recording'].includes(state) ? 'is-current' : ''}><span>02</span><div><strong>录制动作</strong><small>倒计时后开始，最长录制 10 秒</small></div></li>
+        <li className={['processing', 'reviewing', 'saving'].includes(state) ? 'is-current' : ''}><span>03</span><div><strong>裁剪与保存</strong><small>留下满意的片段，加入动作库</small></div></li>
+      </ol>
 
       {notice && (
         <div className={`banner ${notice.kind}`}>
@@ -865,91 +833,41 @@ export default function MotionLibraryPage() {
       )}
 
       <div className="mocap-grid">
-        <section className="panel camera-panel">
-          <h2>摄像头</h2>
-          <CameraCapture
-            onFrame={handleFrame}
-            handleRef={cameraRef}
-            locked={state === 'recording' || state === 'countdown'}
-            onStatus={(s, d) => {
-              // ★ 注意守卫要同时允许 camera-off 与 loading-model：
-              //   session 的启动过程本身就会先报 'starting'（我们因此进入 loading-model），
-              //   若这里只认 camera-off，就再也晋升不到 detecting ——
-              //   表现为"徽章一直显示加载中"，而实际上摄像头已经跑起来了。
-              //   （这个 bug 是预检脚本抓出来的，真人上场时会立刻撞到。）
-              const notStarted = stateRef.current === 'camera-off' || stateRef.current === 'loading-model';
-              // 跳过校准时不要求"校准通过"才就绪 —— 摄像头一跑起来就能录
-              if (s === 'running' && notStarted) setStateBoth(skipCalibrationRef.current ? 'ready' : 'detecting');
-              else if (s === 'starting' && stateRef.current === 'camera-off') setStateBoth('loading-model');
-              else if (s === 'error') setStateBoth('error');
-              else if (s === 'stopped') setStateBoth('camera-off');
-              if (d && s === 'error') setNotice({ kind: 'error', text: d });
-            }}
-          />
-        </section>
+        <section className="panel control-panel">
+          <div className="section-heading"><h2>录制动作</h2><span className="section-note">保持全身入镜，动作自然连贯</span></div>
 
-        <section className="panel preview-panel">
-          <h2>VRM 预览</h2>
-          <div className="preview-toolbar">
-            <label>
-              主角色
-              <AvatarSelect ariaLabel="主角色资产" value={primaryAvatar} onChange={setPrimaryAvatar} />
-            </label>
-            {twoChars && (
-              <label>
-                对照角色
-                <AvatarSelect ariaLabel="对照角色资产" value={secondAvatar} onChange={setSecondAvatar} />
-              </label>
-            )}
-            <label>
-              <input type="checkbox" checked={twoChars} onChange={(e) => setTwoChars(e.target.checked)} />
-              双角色对比
-            </label>
-            <label>
-              <input type="checkbox" checked={skeleton} onChange={(e) => setSkeleton(e.target.checked)} />
-              骨架
-            </label>
-            <button type="button" onClick={() => previewRef.current?.pause()}>
-              暂停
+          <div className="record-box">
+            <button
+              type="button"
+              className="primary"
+              onClick={beginCountdown}
+              disabled={!canRecord}
+              title={recordHint}
+            >
+              开始录制
             </button>
-            <button type="button" onClick={() => previewRef.current?.resume()}>
-              继续
-            </button>
-            <button type="button" onClick={() => previewRef.current?.stop()}>
+            <button
+              type="button"
+              className="danger"
+              onClick={stopRecording}
+              disabled={state !== 'recording' && state !== 'countdown'}
+            >
               停止
             </button>
-            <button type="button" onClick={() => previewRef.current?.resetToBase()}>
-              恢复基础站姿
-            </button>
+            {state === 'countdown' && <div className="countdown">{countdown > 0 ? countdown : '开始'}</div>}
+            {state === 'recording' && (
+              <div className="rec-live">
+                <strong>{(recLive.ms / 1000).toFixed(1)}s</strong> / {MOCAP_LIMITS.maxRecordingMs / 1000}s
+                <span>帧 {recLive.frames}</span>
+                <span>有效 {(recLive.valid * 100).toFixed(0)}%</span>
+                <span>最长丢失 {recLive.lostMs.toFixed(0)}ms</span>
+              </div>
+            )}
           </div>
-          <MocapVrmPreview
-            ref={previewRef}
-            primaryUrl={primaryAvatar}
-            secondUrl={secondAvatar}
-            showSecond={twoChars}
-            onError={(m) =>
-              setNotice({
-                kind: 'warn',
-                text: `${m}${twoChars ? '（第二个角色需要先跑 node tools/fetch-assets.mjs）' : ''}`,
-              })
-            }
-          />
-          <div className="preview-status">
-            <span>回放 {clipSnapshot.state}</span>
-            <span>
-              {clipSnapshot.time.toFixed(2)}s / {clipSnapshot.duration.toFixed(2)}s
-            </span>
-            <span>
-              每帧 vrm.update{' '}
-              {previewRef.current?.getStatus().lastFrameUpdates ?? '—'} 次
-              {twoChars ? '（双角色应为 2）' : '（单角色应为 1）'}
-            </span>
-          </div>
-        </section>
 
-        <section className="panel control-panel">
-          <h2>录制流程</h2>
-
+          <details className="advanced-panel capture-advanced">
+            <summary><span>高级设置与标定</span><span className="summary-note">校准 · 左右交换 · 探针</span></summary>
+            {!RETARGET_IS_MEASURED && <div className="banner warn"><span>轴向映射尚待真人验证。若角色的动作方向不一致，可使用下方左右交换与探针进行标定。</span></div>}
           <div className="calibration-box">
             <label
               className="skip-calibration"
@@ -1041,34 +959,7 @@ export default function MotionLibraryPage() {
 
           {probeResult && <ProbeTable result={probeResult} />}
 
-          <div className="record-box">
-            <button
-              type="button"
-              className="primary"
-              onClick={beginCountdown}
-              disabled={!canRecord}
-              title={recordHint}
-            >
-              开始录制
-            </button>
-            <button
-              type="button"
-              className="danger"
-              onClick={stopRecording}
-              disabled={state !== 'recording' && state !== 'countdown'}
-            >
-              停止
-            </button>
-            {state === 'countdown' && <div className="countdown">{countdown > 0 ? countdown : '开始'}</div>}
-            {state === 'recording' && (
-              <div className="rec-live">
-                <strong>{(recLive.ms / 1000).toFixed(1)}s</strong> / {MOCAP_LIMITS.maxRecordingMs / 1000}s
-                <span>帧 {recLive.frames}</span>
-                <span>有效 {(recLive.valid * 100).toFixed(0)}%</span>
-                <span>最长丢失 {recLive.lostMs.toFixed(0)}ms</span>
-              </div>
-            )}
-          </div>
+          </details>
 
           {recOutcome && (
             <div className="quality-box">
@@ -1116,8 +1007,79 @@ export default function MotionLibraryPage() {
           )}
         </section>
 
+        <section className="panel camera-panel">
+          <div className="section-heading"><h2>摄像头画面</h2><span className="section-note">本地识别 · 镜像预览</span></div>
+          <CameraCapture
+            onFrame={handleFrame}
+            handleRef={cameraRef}
+            locked={state === 'recording' || state === 'countdown'}
+            onStatus={(status) => {
+              setStateBoth(stateAfterCameraStatus(stateRef.current, status, skipCalibrationRef.current));
+            }}
+          />
+        </section>
+
+        <section className="panel preview-panel">
+          <div className="section-heading"><h2>影伴预览</h2><span className="section-note">实时跟随与动作回放</span></div>
+          <div className="preview-toolbar">
+            <label>
+              主角色
+              <AvatarSelect ariaLabel="主角色资产" value={primaryAvatar} onChange={setPrimaryAvatar} />
+            </label>
+            {twoChars && (
+              <label>
+                对照角色
+                <AvatarSelect ariaLabel="对照角色资产" value={secondAvatar} onChange={setSecondAvatar} />
+              </label>
+            )}
+            <label>
+              <input type="checkbox" checked={twoChars} onChange={(e) => setTwoChars(e.target.checked)} />
+              双角色对比
+            </label>
+            <label>
+              <input type="checkbox" checked={skeleton} onChange={(e) => setSkeleton(e.target.checked)} />
+              骨架
+            </label>
+            <button type="button" onClick={() => previewRef.current?.pause()}>
+              暂停
+            </button>
+            <button type="button" onClick={() => previewRef.current?.resume()}>
+              继续
+            </button>
+            <button type="button" onClick={() => previewRef.current?.stop()}>
+              停止
+            </button>
+            <button type="button" onClick={() => previewRef.current?.resetToBase()}>
+              恢复基础站姿
+            </button>
+          </div>
+          <MocapVrmPreview
+            ref={previewRef}
+            primaryUrl={primaryAvatar}
+            secondUrl={secondAvatar}
+            showSecond={twoChars}
+            onError={(m) =>
+              setNotice({
+                kind: 'warn',
+                text: `${m}${twoChars ? '（第二个角色需要先跑 node tools/fetch-assets.mjs）' : ''}`,
+              })
+            }
+          />
+          <div className="preview-status">
+            <span>回放 {clipSnapshot.state}</span>
+            <span>
+              {clipSnapshot.time.toFixed(2)}s / {clipSnapshot.duration.toFixed(2)}s
+            </span>
+            <details className="preview-diagnostics"><summary>渲染诊断</summary><span>
+              每帧 vrm.update{' '}
+              {previewRef.current?.getStatus().lastFrameUpdates ?? '—'} 次
+              {twoChars ? '（双角色应为 2）' : '（单角色应为 1）'}
+            </span></details>
+          </div>
+        </section>
+
         <section className="panel library-panel">
-          <h2>动作库</h2>
+          <div className="section-heading"><div><h2>已保存的动作</h2><p>选择一个动作，在上方影伴中回放。</p></div><span className="count-label">{entries.length} 个动作</span></div>
           <MotionList
             entries={entries}
             selectedId={selectedId}
@@ -1177,11 +1139,11 @@ export default function MotionLibraryPage() {
               {busy ? '保存中…' : '保存到动作库'}
             </button>
           </div>
-          <p className="hint">
+          <details className="save-details"><summary>本地保存说明</summary><p className="hint">
             保存会写入 <code>web/public/clips/&lt;id&gt;.json</code> 并更新动作目录；
             原始关键点写在 <code>data/mocap/</code>（不进 git，仅本机可下载）。
             校验不通过时不会部分应用，原状态会保留。
-          </p>
+          </p></details>
         </footer>
       )}
     </main>
