@@ -57,6 +57,41 @@ npm run dev
 
 ---
 
+## 换角色（含接入第三方模型）
+
+角色**不再写死**。`public/avatars/*.vrm` 里的文件会自动出现在两个页面的下拉里：
+
+- `http://localhost:3000/` —— 调试面板的「G0 · 静态资产」下拉
+- `http://localhost:3000/motion-library` —— 「VRM 预览」的主角色 / 对照角色下拉
+
+也可用查询参数指定：`http://localhost:3000/?avatar=/avatars/xxx.vrm`
+（指向目录之外的路径也可以 —— 接口会把当前值补齐进选项）
+
+### 从第三方 GLB 接入一个新角色
+
+```bash
+# 1) Tripo 生成（T-pose 是关键：clip 的轴语义依赖 rest pose）
+cd tripo
+python tpose_pipeline.py --image <照片> --upto ref     # 先出 T-pose 参考图：便宜且肉眼可判
+python tpose_pipeline.py --run <run目录> --upto rig    # 几何 → 贴图 → 绑骨（out_format 默认 glb）
+
+# 2) 转成 VRM（自动把朝向转到 +Z、缩放到米制，并自检）
+cd ..
+node tools/gltf-to-vrm.mjs <rigged.glb> -o web/public/avatars/hero.vrm --name "角色名" --height 1.75
+
+# 3) 刷新页面，下拉里就有了
+```
+
+> **为什么必须是 T-pose**：clip 存的是 normalized-local 的**绝对**四元数，
+> 而 normalized 骨骼的 rest rotation 恒为单位四元数、所有骨骼共享 rig 根坐标系 ——
+> 于是"同一个四元数落在身体哪个方向"完全由 rest pose 决定。
+> 本项目轴线约定是在 Seed-san（面朝 +Z、T-pose 手臂沿 ±X）上实测的。
+>
+> 转正必须**烘进模型数据**（顶点 + 骨架根 + inverseBindMatrices 三者配合），
+> 给根节点加旋转是无效的 —— rig 会跟着一起转，轴与身体的相对关系不变。
+
+---
+
 ## 常用命令
 
 在 `web/` 下：
@@ -68,9 +103,10 @@ npm run dev
 | `npm run gen:clips` | 重新生成全部程序化动作（产出即自检，不合格不写盘） |
 | `npm run validate:all` | 校验 `public/clips/` 下全部动作 |
 | `npm run validate:fixtures` | 跑校验器夹具：6 个坏的全被拒、合法的通过 |
-| `npm test` | 全部 124 项（含 G1 回归与动作库 API 集成；没起服务器时集成部分自动跳过） |
+| `npm test` | 全部 169 项（含 G1 回归、动捕纯逻辑、动作库 API 集成、资产目录） |
+| `npm run verify:pipeline` | 25 项管线验证（假摄像头驱动整条动捕管线，含 10 条验收的可自动化部分） |
 | `npm run test:clip` | 15 项播放与插值逻辑测试（G1 回归） |
-| `npm run test:mocap` | 68 项动捕纯逻辑测试（重定向/校准/平滑/裁剪，全离线） |
+| `npm run test:mocap` | 85 项动捕纯逻辑测试（重定向 61 + clip 烘焙 24，全离线） |
 | `npm run sync:mediapipe` | 同步 MediaPipe 本地资源 |
 
 在仓库根目录：
@@ -81,6 +117,8 @@ npm run dev
 | `node tools/sync-mediapipe.mjs [--check]` | 同步 MediaPipe 本地资源；`--check` 只查不复制，缺文件时退出码 1 |
 | `node tools/inspect-vrm.mjs <file.vrm> [--json\|--manifest]` | 能力探测 |
 | `node tools/validate-clip.mjs <clip.json> [--target <manifest>]` | 校验动作文件，退出码 0/1/2 |
+| `node tools/inspect-fbx.mjs <file.fbx> [--json]` | FBX 检查器（Node 直跑，不开浏览器）：骨骼层次 / **rest pose** / 尺度 / 朝向 |
+| `node tools/gltf-to-vrm.mjs <in.glb> -o <out.vrm> [--name X] [--height 1.75] [--rotate auto\|<deg>] [--dry-run]` | **GLB → VRM 1.0 转换器**（接入第三方模型；产出即自检） |
 | `bash tools/dev-browser.sh status\|up\|down` | 无头浏览器进程管家（仅 Windows） |
 
 ---
