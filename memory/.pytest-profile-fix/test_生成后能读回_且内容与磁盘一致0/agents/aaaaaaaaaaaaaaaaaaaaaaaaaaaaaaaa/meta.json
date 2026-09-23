@@ -1,0 +1,10 @@
+{
+  "agent_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target_speaker": "漫漫",
+  "generated_at": "2026-09-23T22:44:24.296060+08:00",
+  "model_name": "",
+  "persona_mode": "digital-twin-v2",
+  "system_prompt_chars": 3,
+  "memory_chars": 4,
+  "memory_items": 1
+}

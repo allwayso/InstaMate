@@ -91,6 +91,10 @@ function basePoseAll(): Pose {
 const DEFAULT_AVATAR = '/avatars/sample.vrm';
 const SECOND_AVATAR = '/avatars/compat.vrm';
 const COUNTDOWN_FROM = 3;
+const DEFAULT_SPLIT = 38;
+const SPLIT_STORAGE_KEY = 'mocap-split';
+const SPLIT_MIN = 20;
+const SPLIT_MAX = 70;
 
 export default function MotionLibraryPage() {
   // ── 状态机 ───────────────────────────────────────────────────────────
@@ -125,6 +129,52 @@ export default function MotionLibraryPage() {
   const [probing, setProbing] = useState(false);
   const [probeLabel, setProbeLabel] = useState('抬右手');
   const [probeResult, setProbeResult] = useState<ProbeSummary | null>(null);
+  const [split, setSplit] = useState(DEFAULT_SPLIT);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(SPLIT_STORAGE_KEY));
+      if (Number.isFinite(saved) && saved >= SPLIT_MIN && saved <= SPLIT_MAX) setSplit(saved);
+    } catch {
+      // localStorage may be unavailable in privacy mode.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SPLIT_STORAGE_KEY, split.toFixed(1));
+    } catch {
+      // Keep the in-memory preference when persistence is unavailable.
+    }
+  }, [split]);
+
+  const startSplitDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const grid = gridRef.current;
+    if (!grid || event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const rect = grid.getBoundingClientRect();
+    handle.classList.add('is-dragging');
+    handle.setPointerCapture(event.pointerId);
+    const onMove = (moveEvent: PointerEvent) => {
+      const percentage = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+      setSplit(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, percentage)));
+    };
+    const onUp = () => {
+      handle.classList.remove('is-dragging');
+      window.removeEventListener('pointermove', onMove);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+  }, []);
+
+  const onSplitKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowLeft') setSplit((value) => Math.max(SPLIT_MIN, value - 2));
+    else if (event.key === 'ArrowRight') setSplit((value) => Math.min(SPLIT_MAX, value + 2));
+    else return;
+    event.preventDefault();
+  }, []);
 
   // ── 管线对象（用 ref：每帧都要访问，不能走 state）────────────────────
   const solverRef = useRef<MocapSolver | null>(null);
@@ -832,7 +882,11 @@ export default function MotionLibraryPage() {
         </div>
       )}
 
-      <div className="mocap-grid">
+      <div
+        className="mocap-grid"
+        ref={gridRef}
+        style={{ '--split': `${split}%` } as React.CSSProperties}
+      >
         <section className="panel control-panel">
           <div className="section-heading"><h2>录制动作</h2><span className="section-note">保持全身入镜，动作自然连贯</span></div>
 
@@ -1018,6 +1072,19 @@ export default function MotionLibraryPage() {
             }}
           />
         </section>
+
+        <div
+          className="split-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整摄像头与影伴预览的宽度"
+          aria-valuenow={Math.round(split)}
+          tabIndex={0}
+          title="拖动调整左右区域宽度，双击恢复默认"
+          onPointerDown={startSplitDrag}
+          onDoubleClick={() => setSplit(DEFAULT_SPLIT)}
+          onKeyDown={onSplitKeyDown}
+        />
 
         <section className="panel preview-panel">
           <div className="section-heading"><h2>影伴预览</h2><span className="section-note">实时跟随与动作回放</span></div>

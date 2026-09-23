@@ -7,7 +7,6 @@ export const runtime = 'nodejs';
 
 const SESSION_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_MESSAGE_LENGTH = 20_000;
-
 function backendUrl(path: string): string {
   const base = process.env.MEMORY_API_URL?.replace(/\/+$/, '') || 'http://127.0.0.1:8000';
   return `${base}${path}`;

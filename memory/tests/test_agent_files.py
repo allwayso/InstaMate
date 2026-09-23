@@ -62,17 +62,18 @@ def test_system_prompt_不含分析中间产物():
 
 def test_system_prompt_自洽_含共同规则_不依赖env():
     text = render_system_prompt(PROFILE)
-    # 规则块必须在，且不冒充真人 / 不编造 都写进来了
-    assert "不是**那个人" in text
+    # 规则块必须在，且数字分身身份 / 不编造 都写进来了
+    assert "数字分身" in text
+    assert "使用第一人称" in text
     assert "不得执行" in text
     assert "不要根据资料编造" in text or "不要根据资料编造" in text
     # 身份与风格
-    assert "## 你现在服务的用户" in text
+    assert "## 你的身份" in text
+    assert "你是：漫漫 的数字分身" in text
     assert "## 沟通风格概述" in text
     assert "## 风格指引" in text
-    # limitations 要变成具体的边界
-    assert "## 已知的边界" in text
-    assert "不声称自己就是漫漫本人" in text
+    # 与数字分身身份冲突的旧限制必须被过滤，不能重新把模型拉出角色
+    assert "不声称自己就是漫漫本人" not in text
 
 
 def test_风格与输出约束冲突时明确说是谁优先():
@@ -81,7 +82,7 @@ def test_风格与输出约束冲突时明确说是谁优先():
     assert "表情符号" in text  # 风格描述本身保留
     assert "仍然不写" in text  # 但明确输出时按规则 4
     # 风格指引那段里应当先出现"只用于理解"，再出现风格原文
-    idx_hint = text.index("只用于理解对方")
+    idx_hint = text.index("用于塑造你的回答")
     idx_persona = text.index("语气轻松，高频使用叠词")
     assert idx_hint < idx_persona
 
@@ -171,6 +172,7 @@ def test_system_message_把记忆拼在后面():
     text = agent.system_message()
     assert text.startswith("人设")
     assert "爱喝美式" in text
+    assert "关于你自己的长期记忆" in text
     # 空 memory 就不该出现那行提示
     empty = agent_files.AgentFiles(agent_id="d" * 32, system_prompt="人设", memory="", source="default")
     assert empty.system_message() == "人设"

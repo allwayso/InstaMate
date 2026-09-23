@@ -1,0 +1,10 @@
+{
+  "agent_id": "9bb448ccd0d4409aafbb56f64c20e0c3",
+  "target_speaker": "漫漫",
+  "generated_at": "2026-09-23T22:44:24.391907+08:00",
+  "model_name": "gpt-4o-mini",
+  "persona_mode": "digital-twin-v2",
+  "system_prompt_chars": 528,
+  "memory_chars": 20,
+  "memory_items": 1
+}

@@ -12,6 +12,7 @@ from chat_analysis.output import write_messages
 
 from app.agent_files import (
     DEFAULT_AGENT_ID,
+    PERSONA_MODE,
     agent_dir,
     count_memory_items,
     AgentFiles,
@@ -52,7 +53,7 @@ def load_agent(profile_id: str | None) -> AgentFiles:
         raise ValueError("人物档案不存在")
 
     agent = read_agent(ROOT, profile_id)
-    if agent is not None:
+    if agent is not None and _agent_meta(profile_id).get("persona_mode") == PERSONA_MODE:
         return agent
 
     return generate_from_profile(
