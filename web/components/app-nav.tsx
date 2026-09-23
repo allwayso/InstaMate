@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
+import ThemeToggle from './theme-toggle';
 
 const pages = [
   ['/', '影伴空间'],
@@ -18,7 +19,7 @@ export default function AppNav() {
     <header className="app-header">
       <div className="app-header-inner">
         <Link className="brand" href="/" aria-label="InstaMate 影伴首页">
-          <span className="brand-mark" aria-hidden="true"><i /><i /></span>
+          <img className="brand-logo" src="/logo.png" alt="" width="34" height="34" />
           <span>InstaMate<span className="brand-caption">影伴</span></span>
         </Link>
         <nav className="app-nav" aria-label="主导航">
@@ -30,6 +31,7 @@ export default function AppNav() {
             </Link>
           ))}
         </nav>
+        <ThemeToggle />
       </div>
     </header>
   );
