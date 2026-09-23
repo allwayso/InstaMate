@@ -51,9 +51,12 @@ export async function POST(request: Request) {
     const job: AvatarJob = {
       id, name, style: style as AvatarJob['style'], image_name,
       status: 'queued', stage: '等待启动', created_at: now, updated_at: now,
+      pid: null, error: null,
     };
     await writeFile(join(dir, 'job.json'), JSON.stringify(job, null, 2));
-    const child = spawn(process.execPath, [join(repo, 'tools', 'avatar-job.mjs'), id], {
+    // ★ 只跑第一段（背景清洗 + T-pose 平面图，5 积分）就停。
+    //   跑完状态变成 awaiting_continue，等用户看了那张图再决定要不要花后面 85 积分。
+    const child = spawn(process.execPath, [join(repo, 'tools', 'avatar-job.mjs'), id, 'ref'], {
       cwd: repo, env: { ...process.env, TRIPO_API_KEY: tripo.key, TRIPO_BASE_URL: tripo.baseUrl },
       detached: true, stdio: 'ignore',
     });
