@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { localRequestOnly } from '@/lib/local-request';
-import { getTripoConfig } from '@/lib/tripo-settings';
+import { getTripoConfig, publicTripoStatus } from '@/lib/tripo-settings';
 
 export const runtime = 'nodejs';
 
@@ -9,6 +9,9 @@ export async function POST(request: Request) {
   if (gate) return gate;
   try {
     const config = await getTripoConfig();
+    if (publicTripoStatus(config).wrongService) {
+      return NextResponse.json({ error: '当前保存的是阿里百炼地址，请填写 Tripo 3D 服务地址' }, { status: 400 });
+    }
     if (!config.key) return NextResponse.json({ error: '请先保存 Tripo API Key' }, { status: 400 });
     const response = await fetch(`${config.baseUrl}/user/balance`, {
       headers: { Authorization: `Bearer ${config.key}` },

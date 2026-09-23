@@ -6,6 +6,7 @@ type TripoStatus = {
   configured: boolean;
   keySource: 'local-file' | 'environment' | 'missing';
   baseUrl: string;
+  wrongService?: boolean;
 };
 
 export default function TripoSettings({ onConfigured }: { onConfigured: (ready: boolean) => void }) {
@@ -28,7 +29,7 @@ export default function TripoSettings({ onConfigured }: { onConfigured: (ready: 
       .then((data) => {
         if (cancelled) return;
         setStatus(data);
-        setBaseUrl(data.baseUrl);
+        setBaseUrl(data.wrongService ? 'https://api.tripo3d.com/v2/openapi' : data.baseUrl);
         setExpanded(!data.configured);
         onConfigured(data.configured);
       })
@@ -73,13 +74,14 @@ export default function TripoSettings({ onConfigured }: { onConfigured: (ready: 
     <section className="tripo-settings" aria-label="Tripo 服务设置">
       <button className="tripo-settings-toggle" type="button" aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}>
-        <span><strong>Tripo 服务设置</strong><small>模型生成所需的 API Key 与服务地址</small></span>
+        <span><strong>Tripo · 3D 建模与绑骨</strong><small>确认动漫参考图后才会使用，与百炼图片密钥分开</small></span>
         <span className={status?.configured ? 'tripo-status is-ready' : 'tripo-status'}>
           {status === null ? '正在检查' : status.configured ? '已配置' : '需要配置'}
         </span>
         <span aria-hidden="true">{expanded ? '−' : '+'}</span>
       </button>
       {expanded && <div className="tripo-settings-body">
+        {status?.wrongService && <p className="banner warn">旧 Tripo 设置中保存的是阿里百炼地址，不能用于 3D 建模。如需继续生成 3D，请填写 Tripo 专用密钥和地址。</p>}
         <div className="tripo-settings-grid">
           <label>API Key
             <input type="password" value={key} onChange={(event) => setKey(event.target.value)}
@@ -91,7 +93,7 @@ export default function TripoSettings({ onConfigured }: { onConfigured: (ready: 
               spellCheck={false} placeholder="https://api.tripo3d.com/v2/openapi" />
           </label>
         </div>
-        <p className="tripo-settings-note">通过此面板保存的密钥会写入本机忽略 Git 的 tripo/.env；页面不会回显密钥。修改地址后先保存，再测试连接。</p>
+        <p className="tripo-settings-note">仅用于 3D 建模、贴图和自动绑骨。密钥写入本机忽略 Git 的 tripo/.env，页面不会回显。修改地址后先保存，再测试连接。</p>
         <div className="tripo-settings-actions">
           <button type="button" className="primary" disabled={Boolean(busy) || !baseUrl.trim()}
             onClick={() => void save()}>{busy === 'save' ? '保存中…' : '保存配置'}</button>

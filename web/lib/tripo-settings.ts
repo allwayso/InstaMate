@@ -7,6 +7,13 @@ const SETTINGS_PATH = resolve(process.cwd(), '..', 'tripo', '.env');
 
 type TripoConfig = { key: string; baseUrl: string; keySource: 'local-file' | 'environment' | 'missing' };
 
+function isAliyunUrl(value: string): boolean {
+  try {
+    const host = new URL(value).hostname;
+    return host === 'dashscope.aliyuncs.com' || host.endsWith('.aliyuncs.com');
+  } catch { return false; }
+}
+
 function parseEnv(contents: string): Record<string, string> {
   const values: Record<string, string> = {};
   for (const line of contents.split(/\r?\n/)) {
@@ -60,15 +67,18 @@ export async function getTripoConfig(path = SETTINGS_PATH): Promise<TripoConfig>
 }
 
 export function publicTripoStatus(config: TripoConfig) {
+  const wrongService = isAliyunUrl(config.baseUrl);
   return {
-    configured: Boolean(config.key),
+    configured: Boolean(config.key) && !wrongService,
     keySource: config.keySource,
     baseUrl: config.baseUrl,
+    ...(wrongService ? { wrongService: true } : {}),
   };
 }
 
 export async function saveTripoConfig(keyInput: string, baseUrlInput: string, path = SETTINGS_PATH) {
   const baseUrl = validateTripoBaseUrl(baseUrlInput);
+  if (isAliyunUrl(baseUrl)) throw new Error('API 地址是阿里百炼；此处需要 Tripo 3D 服务地址');
   const key = keyInput.trim();
   if (key && !/^[A-Za-z0-9._~+/=-]{1,512}$/.test(key)) {
     throw new Error('API Key 格式不正确：只能包含常见令牌字符，长度不超过 512');
@@ -77,6 +87,10 @@ export async function saveTripoConfig(keyInput: string, baseUrlInput: string, pa
   const previousValues = parseEnv(previous);
   const existingKey = previousValues.TRIPO_API_KEY || previousValues.api_key ||
     process.env.TRIPO_API_KEY || process.env.api_key;
+  const previousBaseUrl = previousValues.TRIPO_BASE_URL || process.env.TRIPO_BASE_URL || DEFAULT_TRIPO_BASE_URL;
+  if (!key && isAliyunUrl(previousBaseUrl)) {
+    throw new Error('请填写 Tripo 专用 API Key；旧百炼密钥不能用于 3D 服务');
+  }
   if (!key && !existingKey) throw new Error('请填写 Tripo API Key');
   const lines = previous.split(/\r?\n/).filter((line) => {
     if (/^\s*(?:export\s+)?TRIPO_BASE_URL\s*=/.test(line)) return false;

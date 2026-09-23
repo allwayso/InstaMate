@@ -52,6 +52,7 @@ web/public/vendor/
 data/mocap/
 data/states/
 data/avatar-jobs/
+data/settings/
 
 # 联网调研的原始结果，与实现无关
 .firecrawl/

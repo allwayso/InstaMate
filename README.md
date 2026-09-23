@@ -91,12 +91,9 @@ MODEL_NAME 配为支持工具调用的模型，例如 qwen-max。
 
 ### 照片创建角色
 
-打开网页「创建角色」，在「Tripo 服务设置」中填写 API Key 和 API 地址并测试连接。配置会保存在本机的 `tripo/.env`，无需重启网页。也可以在 `web/.env.local` 填入 `TRIPO_API_KEY`，或手动在 `tripo/.env` 中配置同名变量；
-本机 Python 还需安装 `tripo/requirements.txt`，或者用 `TRIPO_PYTHON` 指向已有依赖的解释器。
-打开 `/create` 上传 JPG/PNG 照片并填写名称。后台按「动漫 T-pose 参考图 → Tripo 建模和贴图
-→ 自动绑骨 GLB → 本地 VRM 转换与校验」执行。任务记录和原图默认在 `data/avatar-jobs/`，
-VRM 存入 `web/public/avatars/`，可以从完成任务直接打开角色并通过现有动作和聊天面板互动。
-生成需要 Tripo 账户可用额度，任务失败时网页会显示阶段和错误。
+打开 `/create`，先在「阿里百炼 · 图片动漫化」设置中选择千问 `qwen-image-3.0` / `qwen-image-3.0-pro` 或万相 `wan2.7-image-pro`，填写百炼 API Key 与兼容接口地址。配置保存在本机忽略 Git 的 `data/settings/aliyun-image.json`；也可在 `web/.env.local` 配置 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_BASE_URL`。上传 JPG/PNG 人物照片后，先生成动漫 T-pose 参考图并在页面确认效果。
+
+需要 3D 角色时，切换到页面顶部独立的「3D 建模」模块，在「Tripo · 3D 建模与绑骨」中填写**独立的 Tripo 密钥和地址**，选择满意的参考图后手动开始建模。3D 阶段依次完成 Tripo 建模、贴图、自动绑骨 GLB、本地 VRM 转换与校验；Tripo 不再用于图片动漫化。Tripo 配置存于本机的 `tripo/.env`，也可在 `web/.env.local` 中填入 `TRIPO_API_KEY`。本机 Python 需安装 `tripo/requirements.txt`，或用 `TRIPO_PYTHON` 指向已有依赖的解释器。任务记录、原图和参考图保存在 `data/avatar-jobs/`，VRM 存入 `web/public/avatars/`。图片模块可逐条删除记录，或批量清理已结束任务；确认后会删除该任务的原图、参考图及其 VRM，正在生成的任务会保留。两个云端阶段分别需要各自账户的可用额度，任务失败时页面会显示阶段和错误。
 
 ### 启动成功的判据
 
@@ -126,10 +123,9 @@ VRM 存入 `web/public/avatars/`，可以从完成任务直接打开角色并通
 ### 从第三方 GLB 接入一个新角色
 
 ```bash
-# 1) Tripo 生成（T-pose 是关键：clip 的轴语义依赖 rest pose）
+# 1) 先在 /create 用百炼生成并确认动漫 T-pose 参考图
 cd tripo
-python tpose_pipeline.py --image <照片> --upto ref     # 先出 T-pose 参考图：便宜且肉眼可判
-python tpose_pipeline.py --run <run目录> --upto rig    # 几何 → 贴图 → 绑骨（out_format 默认 glb）
+python tpose_pipeline.py --image <已生成的动漫T-pose图> --upto rig  # Tripo 仅负责几何 → 贴图 → 绑骨
 
 # 2) 转成 VRM（自动把朝向转到 +Z、缩放到米制，并自检）
 cd ..
@@ -159,8 +155,8 @@ node tools/gltf-to-vrm.mjs <rigged.glb> -o web/public/avatars/hero.vrm --name "�
 | `npm run gen:clips` | 重新生成全部程序化动作（产出即自检，不合格不写盘） |
 | `npm run validate:all` | 校验 `public/clips/` 下全部动作 |
 | `npm run validate:fixtures` | 跑校验器夹具：6 个坏的全被拒、合法的通过 |
-| `npm test` | 全部 173 项（含 G1 回归、动捕纯逻辑、动作库 API 集成、资产目录） |
-| `npm run verify:pipeline` | 25 项管线验证（假摄像头驱动整条动捕管线，含 10 条验收的可自动化部分） |
+| `npm test` | Node 测试（含 G1 回归、动捕纯逻辑、动作库 API 集成、资产目录）；API 集成项需先启动本机网页服务 |
+| `npm run verify:pipeline` | 管线验证（需 Chrome；假摄像头驱动整条动捕管线，含 10 条验收的可自动化部分） |
 | `npm run test:clip` | 15 项播放与插值逻辑测试（G1 回归） |
 | `npm run test:mocap` | 85 项动捕纯逻辑测试（重定向 61 + clip 烘焙 24，全离线） |
 | `npm run sync:mediapipe` | 同步 MediaPipe 本地资源 |
