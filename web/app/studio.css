@@ -261,8 +261,8 @@ main:focus { outline: none; }
 .camera-device { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
 .camera-device select { flex: 1; width: 0; }
 .camera-layers { flex-basis: 100%; margin: 0; gap: 20px; color: var(--muted); font-size: 12px; }
-.camera-stage { width: 100%; aspect-ratio: 4 / 3; background: var(--stage-bg-2); border: 1px solid var(--inset-border); border-radius: 12px; }
-.camera-video { width: 100%; height: 100%; object-fit: fill; transform: scaleX(-1); }
+.camera-stage { width: 100%; aspect-ratio: 1 / 1; background: var(--stage-bg-2); border: 1px solid var(--inset-border); border-radius: 12px; overflow: hidden; }
+.camera-video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 .camera-video.is-hidden { visibility: hidden; position: absolute; }
 .camera-placeholder { padding: 22px; text-align: center; color: var(--muted); gap: 0; }
 .camera-placeholder h3 { margin: 22px 0 5px; color: var(--fg-2); font-size: 16px; font-weight: 500; }
@@ -287,7 +287,7 @@ main:focus { outline: none; }
 .preview-toolbar > label:first-child select { flex: 1; width: 0; }
 .preview-toolbar > label { font-size: 11px; }
 .preview-toolbar button { min-height: 30px; padding: 4px 9px; font-size: 11px; }
-.mocap-preview-mount { height: auto; aspect-ratio: 4 / 3; border-radius: 12px; border: 1px solid var(--inset-border); }
+.mocap-preview-mount { height: auto; aspect-ratio: 1 / 1; border-radius: 12px; border: 1px solid var(--inset-border); overflow: hidden; }
 .mocap-preview-mount canvas { display: block; width: 100%; height: 100%; }
 .preview-status { margin-top: 16px; font-size: 11px; gap: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .preview-diagnostics { margin-left: auto; color: var(--muted-2); }
@@ -351,10 +351,8 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .mocap-grid {
     gap: 18px 14px;
     grid-template-columns: minmax(300px, var(--split, 38%)) 16px minmax(0, 1fr);
-    /* 中间行 = 视口高 − 固定 chrome（导航/页头/步骤条/控制条 ≈ 430px）：
-       第一屏刚好撑满，动作库留在下方滚动区；画布已脱离文档流，不会反馈撑爆 */
-    grid-template-rows: auto minmax(360px, calc(100dvh - 430px)) auto;
-    align-items: stretch; /* 覆盖 globals 的 align-items:start，让两个面板同高撑满整行 */
+    grid-template-rows: auto auto auto;
+    align-items: start;
   }
   /* 分栏拖把手 */
   .split-handle { display: flex; align-items: center; justify-content: center; cursor: col-resize; touch-action: none; border-radius: 8px; }
@@ -366,16 +364,16 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .control-panel .capture-advanced { margin: 0; border: 0; }
   .control-panel .capture-advanced[open] { grid-column: 1 / -1; margin-top: 14px; border-top: 1px solid var(--border); }
   .control-panel .quality-box, .control-panel .build-box { grid-column: 1 / -1; }
-  /* 两个面板撑满整行高度，画面区域吃掉面板内剩余空间 */
+  /* 两个画面都固定为正方形；右侧角色预览拥有更大的尺寸上限。 */
   .camera-panel, .preview-panel { padding: 18px; display: flex; flex-direction: column; min-height: 0; }
   .camera-panel .section-heading, .preview-panel .section-heading { margin-bottom: 14px; }
   .camera-capture { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .camera-controls, .preview-toolbar { min-height: 72px; margin-bottom: 12px; }
   .camera-diagnostics { margin-top: 10px; }
   .camera-diagnostics > summary { min-height: 34px; padding: 8px 0; }
-  .camera-stage, .mocap-preview-mount { flex: 1; width: 100%; height: auto; min-height: 0; aspect-ratio: auto; margin: 0; }
-  /* 影伴预览：方形（1:1）舞台，以可用高度为准、水平居中 */
-  .mocap-preview-mount { width: auto; max-width: 100%; aspect-ratio: 1 / 1; align-self: center; }
+  .camera-stage, .mocap-preview-mount { flex: 0 0 auto; height: auto; min-height: 0; aspect-ratio: 1 / 1; margin: 0; align-self: center; }
+  .camera-stage { width: min(100%, 520px); }
+  .mocap-preview-mount { width: min(100%, 720px); }
   /* 画面内容脱离文档流：不参与高度计算，避免"画布撑大行高 → 行高又撑大画布"的循环 */
   .camera-stage { position: relative; }
   .camera-stage .camera-video { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -402,7 +400,7 @@ code { background: var(--code-bg); color: var(--code-fg); overflow-wrap: anywher
   .mocap-grid { grid-template-columns: 1fr; }
   .camera-controls, .preview-toolbar { min-height: 0; }
   .preview-toolbar > label:first-child { flex-basis: 50%; }
-  .mocap-preview-mount { max-height: 540px; aspect-ratio: auto; height: 480px; }
+  .camera-stage, .mocap-preview-mount { width: min(100%, 640px); height: auto; aspect-ratio: 1 / 1; margin-left: auto; margin-right: auto; }
   .states-grid { gap: 22px; }
   .workflow-steps { gap: 14px; }
   .workflow-steps small { display: none; }
