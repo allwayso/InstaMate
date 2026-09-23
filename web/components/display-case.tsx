@@ -28,6 +28,7 @@ import type { ClipFile } from '@/lib/clip-spec';
 import type { Pose } from '@/lib/pose';
 import { HUMAN_BONES_VRM1 as HUMAN_BONES } from '@/lib/contracts';
 import type { VrmCapabilities } from '@/lib/contracts';
+import AvatarSelect from '@/components/avatar-select';
 
 const DEFAULT_AVATAR = '/avatars/sample.vrm';
 
@@ -52,6 +53,16 @@ interface ClipApi {
 }
 
 export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) {
+  // 选中的资产。初始值来自 props（?avatar=<url>），之后由 HUD 下拉控制。
+  // 之所以要有内部 state：查询参数与用户选择是两条独立输入源，都归一到这里，
+  // 加载 effect 只依赖它 —— 否则就要为两种入口各写一套加载逻辑。
+  const [avatarUrl, setAvatarUrl] = useState(src);
+
+  // props（?avatar=）变化时跟随。这里的 [src] 是【有意】的，别跟着改成 [avatarUrl]。
+  useEffect(() => {
+    setAvatarUrl(src);
+  }, [src]);
+
   const mountRef = useRef<HTMLDivElement>(null);
   const helpersRef = useRef<THREE.Group | null>(null);
   const resetViewRef = useRef<(() => void) | null>(null);
@@ -167,7 +178,7 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
     scene.add(helpers);
 
     // --- 加载 VRM ---
-    loadVrm(src)
+    loadVrm(avatarUrl)
       .then((result) => {
         if (cancelled) {
           result.dispose();
@@ -307,7 +318,7 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
 
         // G0/G1 证据出口：readView/readControls 实时读取；pose 探针供自动化验收
         (window as unknown as Record<string, unknown>).__vrmDebug = {
-          src,
+          src: avatarUrl,
           capabilities: result.capabilities,
           boundingBox: {
             heightM: Number(size.y.toFixed(3)),
@@ -491,7 +502,7 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
       renderer.forceContextLoss();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
-  }, [src]);
+  }, [avatarUrl]);
 
   // HUD 的播放状态：低频轮询，避免每帧触发 React 重渲染
   useEffect(() => {
@@ -521,6 +532,15 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
         {hudOpen && (
           <>
             <strong>G0 · 静态资产</strong>
+
+            <div className="hud-row">
+              <AvatarSelect
+                className="hud-select"
+                ariaLabel="角色资产"
+                value={avatarUrl}
+                onChange={setAvatarUrl}
+              />
+            </div>
             {error ? (
               <div className="hud-error" role="alert">
                 <div>加载失败</div>
@@ -559,7 +579,7 @@ export default function DisplayCase({ src = DEFAULT_AVATAR }: { src?: string }) 
                 </dd>
               </dl>
             ) : (
-              <div className="hud-loading">加载中… {src}</div>
+              <div className="hud-loading">加载中… {avatarUrl}</div>
             )}
 
             <hr className="hud-sep" />

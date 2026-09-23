@@ -22,6 +22,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CameraCapture, { type CameraCaptureHandle, type CameraFramePayload } from './camera-capture';
+import AvatarSelect from '@/components/avatar-select';
 import MocapVrmPreview, { type MocapPreviewHandle } from './mocap-vrm-preview';
 import ClipTrimmer from './clip-trimmer';
 import MotionList from './motion-list';
@@ -125,6 +126,9 @@ export default function MotionLibraryPage() {
   const [displayName, setDisplayName] = useState('真人动作');
   const [requestedId, setRequestedId] = useState('');
   const [twoChars, setTwoChars] = useState(false);
+  // 主角色可换（用哪个角色演示动作）；对照角色只在"双角色对比"时才会用到。
+  const [primaryAvatar, setPrimaryAvatar] = useState(DEFAULT_AVATAR);
+  const [secondAvatar, setSecondAvatar] = useState(SECOND_AVATAR);
   const [entries, setEntries] = useState<ClipCatalogEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -888,6 +892,16 @@ export default function MotionLibraryPage() {
           <h2>VRM 预览</h2>
           <div className="preview-toolbar">
             <label>
+              主角色
+              <AvatarSelect ariaLabel="主角色资产" value={primaryAvatar} onChange={setPrimaryAvatar} />
+            </label>
+            {twoChars && (
+              <label>
+                对照角色
+                <AvatarSelect ariaLabel="对照角色资产" value={secondAvatar} onChange={setSecondAvatar} />
+              </label>
+            )}
+            <label>
               <input type="checkbox" checked={twoChars} onChange={(e) => setTwoChars(e.target.checked)} />
               双角色对比
             </label>
@@ -910,8 +924,8 @@ export default function MotionLibraryPage() {
           </div>
           <MocapVrmPreview
             ref={previewRef}
-            primaryUrl={DEFAULT_AVATAR}
-            secondUrl={SECOND_AVATAR}
+            primaryUrl={primaryAvatar}
+            secondUrl={secondAvatar}
             showSecond={twoChars}
             onError={(m) =>
               setNotice({
