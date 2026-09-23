@@ -6,7 +6,7 @@ import { triggerState } from '@/lib/state-events';
 import { speakText, stopSpeaking } from '@/lib/voice';
 import { PROFILE_CHANGE_EVENT, PROFILE_STORAGE_KEY } from '@/lib/profile-selection';
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string; source?: 'voice'; triggered?: string[] };
+type ChatMessage = { role: 'user' | 'assistant'; content: string; source?: 'voice'; triggered?: string[]; localOnly?: boolean };
 type ChatTrigger = {
   id: string; name: string; emotion: string; duration: number | null; loop: boolean; clip_id: string | null;
 };
@@ -96,11 +96,12 @@ export default function ChatPanel() {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: text, profile_id: profileId || null }),
       });
-      const data = await response.json() as { answer?: string; triggers?: ChatTrigger[]; error?: string };
+      const data = await response.json() as { answer?: string; triggers?: ChatTrigger[]; error?: string; local_only?: boolean };
       if (!response.ok || typeof data.answer !== 'string') throw new Error(data.error ?? '对话失败');
       const triggers = Array.isArray(data.triggers) ? data.triggers : [];
       setMessages((current) => [...current, {
         role: 'assistant', content: data.answer!, triggered: triggers.map((trigger) => trigger.name),
+        localOnly: data.local_only === true,
       }]);
       for (const trigger of triggers) {
         triggerState({
@@ -108,7 +109,7 @@ export default function ChatPanel() {
           clipId: trigger.clip_id, emotion: trigger.emotion,
         }, 'chat');
       }
-      if (voiceOn && data.answer) {
+      if (voiceOn && data.answer && !data.local_only) {
         void speakText(data.answer).catch((cause: unknown) =>
           setVoiceError(cause instanceof Error ? cause.message : '语音播报失败'));
       }
@@ -231,6 +232,7 @@ export default function ChatPanel() {
             <span>{item.role === 'user' ? (item.source === 'voice' ? '你 · 语音' : '你') : '影伴'}</span>
             <p>{item.content}</p>
             {!!item.triggered?.length && <small>已触发：{item.triggered.join('、')}</small>}
+            {item.localOnly && <small>本地动作回应 · 配置模型后可自由聊天</small>}
           </div>
         ))}
         {sending && <p className="chat-placeholder">影伴正在回复…</p>}
