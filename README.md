@@ -80,6 +80,8 @@ qwen-audio-3.0-tts-plus 合成；麦克风需要 localhost 或 HTTPS。
 在 memory/.env 中将 OPENAI_API_KEY 配为相应密钥，
 OPENAI_BASE_URL 配为 https://dashscope.aliyuncs.com/compatible-mode/v1，
 MODEL_NAME 配为支持工具调用的模型，例如 qwen-max。
+未配置模型密钥时，「你好」等已绑定的状态词仍可触发本地动作与简短回复；
+自由聊天会提示需要配置密钥。配置后重启 Python 服务即可启用完整对话。
 聊天 ZIP 分析可复用 `memory/.env` 的聊天模型配置；也可在 `memory/.env.analysis`
 单独配置 `ANALYSIS_OPENAI_API_KEY`、`ANALYSIS_OPENAI_BASE_URL` 与 `ANALYSIS_MODEL_NAME`。
 

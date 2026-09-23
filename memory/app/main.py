@@ -1,4 +1,5 @@
 import json
+import re
 import zipfile
 from functools import lru_cache
 
@@ -51,6 +52,7 @@ class ChatResponse(BaseModel):
     session_id: str
     answer: str
     triggers: list[Trigger] | None = None
+    local_only: bool | None = None
 
 
 class HistoryMessage(BaseModel):
@@ -66,8 +68,14 @@ class ChatHistoryResponse(BaseModel):
 memory_store = FileMemoryStore(settings.memory_read_dir, settings.memory_write_dir)
 
 
+class ModelNotConfigured(RuntimeError):
+    pass
+
+
 @lru_cache(maxsize=1)
 def get_chat_model() -> ChatOpenAI:
+    if not settings.openai_api_key.strip():
+        raise ModelNotConfigured("大模型密钥未配置。请在 memory/.env 设置 OPENAI_API_KEY 后重启 Python 服务。")
     return ChatOpenAI(
         model=settings.model_name,
         api_key=settings.openai_api_key,
@@ -93,6 +101,24 @@ def get_chat_runnable() -> RunnableWithMessageHistory:
     )
 
 
+def matching_state(message: str, states: list[PlayableState]) -> PlayableState | None:
+    """Explicit trigger words take precedence over model tool selection."""
+    text = message.casefold()
+    matches: list[tuple[int, PlayableState]] = []
+    for state in states:
+        for word in state.trigger_words:
+            term = word.strip().casefold()
+            if not term:
+                continue
+            if term.isascii() and term.isalnum():
+                found = re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text)
+            else:
+                found = term in text
+            if found:
+                matches.append((len(term), state))
+    return max(matches, key=lambda item: item[0])[1] if matches else None
+
+
 def chat_with_states(request: ChatRequest) -> ChatResponse:
     """Use the same persisted conversation and let the model choose one real state."""
     states = {state.id: state for state in request.states}
@@ -113,19 +139,30 @@ def chat_with_states(request: ChatRequest) -> ChatResponse:
         for state in request.states
     )
     profile_context = profiles.prompt_context(request.profile_id) if request.profile_id else ""
+    matched = matching_state(request.message, request.states)
+    action_instruction = (
+        f"已按触发词播放「{matched.name}」，请直接回应，不要再调用动作。" if matched else
+        "问候或明确的动作请求要调用 play_state；没有合适状态时正常聊天。"
+    )
     system = SystemMessage(content=(
         f"{settings.system_prompt}\n你是住在桌面 3D 角色里的影伴。"
         f"{profile_context}\n"
-        "可用状态：" + state_descriptions + "。"
-        "问候或明确的动作请求要调用 play_state；没有合适状态时正常聊天。"
+        f"可用状态：{state_descriptions}。{action_instruction}"
         "每轮最多调用一个状态。回复会被朗读，请用简短口语回答，不写表情符号或舞台动作。"
     ))
     history = memory_store.for_session(request.session_id)
     human = HumanMessage(content=request.message)
     messages = [system, *history.messages, human]
-    model = get_chat_model().bind_tools([tool], tool_choice="auto") if states else get_chat_model()
-    first = model.invoke(messages)
-    triggers: list[Trigger] = []
+    triggers: list[Trigger] = [Trigger(**matched.model_dump(exclude={"trigger_words"}))] if matched else []
+    try:
+        model = get_chat_model()
+    except ModelNotConfigured:
+        if not matched:
+            raise
+        answer = "你好！很高兴见到你。" if matched.clip_id == "wave-right-hand" else f"好的，我来做「{matched.name}」。"
+        history.add_messages([human, AIMessage(content=answer)])
+        return ChatResponse(session_id=request.session_id, answer=answer, triggers=triggers, local_only=True)
+    first = (model if matched or not states else model.bind_tools([tool], tool_choice="auto")).invoke(messages)
     if isinstance(first, AIMessage) and first.tool_calls:
         messages.append(first)
         for call in first.tool_calls:
@@ -167,17 +204,20 @@ def health() -> dict[str, str]:
 async def chat(request: ChatRequest) -> ChatResponse:
     if request.profile_id and profiles.get_profile(request.profile_id) is None:
         raise HTTPException(status_code=404, detail="人物档案不存在")
-    if request.states or request.profile_id:
-        return await run_in_threadpool(chat_with_states, request)
-    result = await run_in_threadpool(
-        get_chat_runnable().invoke,
-        {"message": request.message},
-        {"configurable": {"session_id": request.session_id}},
-    )
-    return ChatResponse(
-        session_id=request.session_id,
-        answer=message_content_to_text(result.content),
-    )
+    try:
+        if request.states or request.profile_id:
+            return await run_in_threadpool(chat_with_states, request)
+        result = await run_in_threadpool(
+            get_chat_runnable().invoke,
+            {"message": request.message},
+            {"configurable": {"session_id": request.session_id}},
+        )
+        return ChatResponse(
+            session_id=request.session_id,
+            answer=message_content_to_text(result.content),
+        )
+    except ModelNotConfigured as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @app.get("/api/chat/{session_id}", response_model=ChatHistoryResponse)

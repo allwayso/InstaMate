@@ -129,7 +129,7 @@ def test_chat_with_states_triggers_clip_and_keeps_session_history(tmp_path: Path
     client = TestClient(chat_api.app)
     response = client.post("/api/chat", json={
         "session_id": "person-1",
-        "message": "你好，挥挥手",
+        "message": "请展示一个友好的欢迎动作",
         "states": [{
             "id": "clip-wave-right-hand",
             "name": "右手挥手",
@@ -152,5 +152,58 @@ def test_chat_with_states_triggers_clip_and_keeps_session_history(tmp_path: Path
         }],
     }
     assert [message.content for message in store.for_session("person-1").messages] == [
-        "你好，挥挥手", "你好，我来挥手。",
+        "请展示一个友好的欢迎动作", "你好，我来挥手。",
     ]
+
+
+def test_explicit_greeting_always_triggers_wave_without_model_tool_choice(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(chat_api, "memory_store", FileMemoryStore(tmp_path, tmp_path))
+
+    class FakeModel:
+        def bind_tools(self, *_args, **_kwargs):
+            raise AssertionError("explicit state must not depend on model tool selection")
+
+        def invoke(self, messages):
+            assert "已按触发词播放「右手挥手」" in messages[0].content
+            return AIMessage(content="你好，很高兴见到你。")
+
+    monkeypatch.setattr(chat_api, "get_chat_model", lambda: FakeModel())
+    response = TestClient(chat_api.app).post("/api/chat", json={
+        "session_id": "greeting-1", "message": "你好",
+        "states": [{
+            "id": "clip-wave-right-hand", "name": "右手挥手",
+            "trigger_words": ["你好", "hi", "挥手"], "clip_id": "wave-right-hand",
+        }],
+    })
+    assert response.status_code == 200
+    assert response.json()["triggers"][0]["clip_id"] == "wave-right-hand"
+    assert response.json()["answer"] == "你好，很高兴见到你。"
+
+
+def test_missing_model_keeps_greeting_action_and_reports_other_chat_error(tmp_path: Path, monkeypatch) -> None:
+    store = FileMemoryStore(tmp_path, tmp_path)
+    monkeypatch.setattr(chat_api, "memory_store", store)
+
+    def unconfigured_model():
+        raise chat_api.ModelNotConfigured("请配置模型密钥")
+
+    monkeypatch.setattr(chat_api, "get_chat_model", unconfigured_model)
+    client = TestClient(chat_api.app)
+    states = [{
+        "id": "clip-wave-right-hand", "name": "右手挥手",
+        "trigger_words": ["你好"], "clip_id": "wave-right-hand",
+    }]
+    greeting = client.post("/api/chat", json={
+        "session_id": "offline-1", "message": "你好", "states": states,
+    })
+    assert greeting.status_code == 200
+    assert greeting.json()["local_only"] is True
+    assert greeting.json()["triggers"][0]["clip_id"] == "wave-right-hand"
+    assert len(client.get("/api/chat/offline-1").json()["messages"]) == 2
+
+    unknown = client.post("/api/chat", json={
+        "session_id": "offline-1", "message": "今天怎么样", "states": states,
+    })
+    assert unknown.status_code == 503
+    assert unknown.json()["detail"] == "请配置模型密钥"
+    assert len(client.get("/api/chat/offline-1").json()["messages"]) == 2
